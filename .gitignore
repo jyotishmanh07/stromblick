@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# Data — fetched from SMARD, reproducible via scripts/ingest_smard_api.py
+data/raw/
+data/clean/*.csv
+
+# keep directory structure and provenance under version control
+!data/clean/.gitkeep
+!data/clean/metadata.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local planning / instruction docs — not shipped with the project
+/CLAUDE.md
+/STROMBLICK_PLAN.md
+/SMARD_API.md
