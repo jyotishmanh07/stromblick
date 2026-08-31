@@ -27,5 +27,4 @@ data/clean/*.csv
 
 # Local planning / instruction docs — not shipped with the project
 /CLAUDE.md
-/STROMBLICK_PLAN.md
-/SMARD_API.md
+/plan.md
