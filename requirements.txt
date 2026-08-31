@@ -1,0 +1,4 @@
+# Streamlit Community Cloud installs this file. Installing the project itself (".")
+# puts the importable `energy_forecast` package on the path — no PYTHONPATH=src needed —
+# and pulls its pinned runtime dependencies from pyproject.toml.
+.
