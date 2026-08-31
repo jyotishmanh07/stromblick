@@ -1,0 +1,54 @@
+{
+  "snapshot_start": "2025-09-07 22:00:00+00:00",
+  "snapshot_end": "2026-08-31 07:00:00+00:00",
+  "rows": 8578,
+  "origins": 329,
+  "step_hours": 24,
+  "horizon_hours": 24,
+  "eval_start": "2025-10-05 22:00:00+00:00",
+  "eval_end": "2026-08-30 21:00:00+00:00",
+  "eval_hours": 7882,
+  "champion": "HistGradientBoosting",
+  "lift_vs_seasonal_naive_pct": 50.6,
+  "models": {
+    "Seasonal naive": {
+      "mae_mean": 3934.9,
+      "mae_std": 3349.3,
+      "rmse_mean": 4486.9,
+      "smape_mean": 7.467
+    },
+    "SARIMAX": {
+      "mae_mean": 3366.3,
+      "mae_std": 2883.0,
+      "rmse_mean": 3990.9,
+      "smape_mean": 6.302
+    },
+    "HistGradientBoosting": {
+      "mae_mean": 1944.2,
+      "mae_std": 1365.9,
+      "rmse_mean": 2350.2,
+      "smape_mean": 3.558
+    }
+  },
+  "interval_coverage": {
+    "nominal": 95.0,
+    "empirical": 93.16,
+    "hours_scored": 7810.0,
+    "mean_band_mw": 11149.8
+  },
+  "top_features": [
+    [
+      "lag_1h",
+      7064.11264011013
+    ],
+    [
+      "hour",
+      1258.2641665546469
+    ],
+    [
+      "weekday",
+      145.23547253419204
+    ]
+  ],
+  "worst_hour": 14
+}

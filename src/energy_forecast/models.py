@@ -28,7 +28,9 @@ class SeasonalNaive:
         data = frame.copy()
         data["timestamp"] = pd.to_datetime(data.timestamp, utc=True)
         series = data.drop_duplicates("timestamp").set_index("timestamp")["demand_mw"]
-        self.series = series.sort_index()
+        # Drop SMARD hours indexed but not yet published: a NaN is not an observation,
+        # and it must never become the iloc[-1] last-resort fallback below.
+        self.series = series.sort_index().dropna()
         return self
 
     def predict(self, timestamps: pd.DatetimeIndex) -> np.ndarray:
@@ -95,7 +97,9 @@ class HistGradientBoostingForecast:
             )[0]
         data = frame.copy()
         data["timestamp"] = pd.to_datetime(data.timestamp, utc=True)
-        self.history = data.set_index("timestamp")["demand_mw"].sort_index().astype(float)
+        # Recursive forecasting reads lags off this series; a NaN (indexed but unpublished
+        # SMARD hour) would poison every downstream step through the iloc[-1] fallback.
+        self.history = data.set_index("timestamp")["demand_mw"].sort_index().astype(float).dropna()
         return self
 
     def forecast(self, timestamps: pd.DatetimeIndex) -> np.ndarray:

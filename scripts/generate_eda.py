@@ -15,31 +15,14 @@ import pandas as pd
 
 from energy_forecast.data import load_clean_demand, missing_hourly_timestamps
 from energy_forecast.features import german_holidays
+from energy_forecast.theme import BLUE, INK, ORANGE
+from energy_forecast.theme import GREEN as AQUA
+from energy_forecast.theme import style_axes as _style_axes
 
 FIG_DIR = Path("reports/figures")
 REPORT_PATH = Path("reports/eda.md")
 
-# Categorical/sequential slots from the project's validated reference palette.
-BLUE = "#2a78d6"
-ORANGE = "#eb6834"
-AQUA = "#1baf7a"
-INK = "#0b0b0b"
-MUTED = "#898781"
-GRID = "#e1e0d9"
-
 WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-
-def _style_axes(ax: plt.Axes) -> None:
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color(MUTED)
-    ax.spines["bottom"].set_color(MUTED)
-    ax.grid(axis="y", color=GRID, linewidth=1, zorder=0)
-    ax.set_axisbelow(True)
-    ax.tick_params(colors=MUTED)
-    ax.xaxis.label.set_color(MUTED)
-    ax.yaxis.label.set_color(MUTED)
 
 
 def plot_overview(frame: pd.DataFrame, out: Path) -> None:
