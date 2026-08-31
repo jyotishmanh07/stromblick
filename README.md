@@ -4,6 +4,8 @@
 
 **Germany Electricity Demand Forecasting & Anomaly Detection**
 
+🔗 **Live dashboard:** _deploy on [Streamlit Community Cloud](https://share.streamlit.io) with `app/streamlit_app.py` and paste the URL here._
+
 Stromblick forecasts Germany's electricity demand for the next 24 hours and highlights unusually high or low demand. It demonstrates data validation, time-series feature engineering, chronological evaluation, statistical reasoning, Python, an API, a dashboard, automated tests, and Docker.
 
 ## Product question
@@ -23,6 +25,22 @@ The repository compares exactly three model levels:
 `rolling_origin_backtest` evaluates future windows chronologically. Model selection belongs on validation origins; a final holdout should be passed only after that choice is made. Metrics are MAE, RMSE, and sMAPE, with error slices by hour, weekday, month, and holiday status. Residual intervals and anomaly bounds are estimated from validation residuals.
 
 Every lag and rolling feature is shifted first, so current or future demand cannot leak into a training row. DST-aware timestamps are normalized to UTC; naive source timestamps are interpreted as Europe/Berlin.
+
+## Results
+
+Full rolling-origin backtest of all three levels over the collected snapshot — every model refit at every origin, no random split — is in **[reports/benchmark.md](reports/benchmark.md)** (regenerate with `PYTHONPATH=src python scripts/benchmark.py`).
+
+<!-- RESULTS-TABLE:START — copied from reports/benchmark.md; regenerate with scripts/benchmark.py -->
+329 daily origins, first after 28 days of history, each scored on the next 24 hours (7,882 forecast hours, Oct 2025 – Aug 2026):
+
+| Model | MAE (MW) | RMSE (MW) | sMAPE (%) | MAE vs seasonal-naive |
+|---|---|---|---|---|
+| Seasonal naive | 3,935 (±3,349) | 4,487 | 7.47 | — |
+| SARIMAX | 3,366 (±2,883) | 3,991 | 6.30 | −14.4% |
+| HistGradientBoosting | 1,944 (±1,366) | 2,350 | 3.56 | **−50.6%** |
+<!-- RESULTS-TABLE:END -->
+
+`HistGradientBoosting` is the champion, roughly halving seasonal-naive MAE. The report also carries prediction-interval coverage (empirical ≈ 93% against a 95% nominal target, walked forward with a trailing-week residual band), permutation importance on a held-out validation week (`lag_1h` dominates, then `hour`), per-origin error, and error slices by hour, weekday, month, and holiday — public holidays are the weak spot (MAE ~4,600 vs ~1,900 MW on ordinary days). The gradient-boosting hyperparameters were checked with a small rolling-origin sweep and left at their defaults — see the report's *Model configuration* section.
 
 ## Data
 
@@ -46,17 +64,15 @@ The API and dashboard fall back to deterministic synthetic demo data when the cl
 
 ### Reading the dashboard
 
-**Header metrics** — the most recent observed demand in MW, the fixed 24-hour forecast horizon, and which data source is loaded ("SMARD clean export" for the real snapshot, or the deterministic demo series when `data/clean/demand_hourly.csv` is absent).
+A header metrics row — latest observed demand, the fixed 24-hour horizon, and the loaded data source ("SMARD clean export" for the real snapshot, the deterministic demo series otherwise) — sits above four tabs.
 
-**Next 24 hours** — the last three days of observed demand (dark blue) followed by the 24-hour forecast (light blue). The pink band is the prediction interval: the forecast ± the 95th percentile of absolute residuals the model made on a held-out validation week, so its width reflects how wrong the model has recently been, not a probabilistic guarantee. Gaps in the observed line are hours SMARD has indexed but not yet published.
+**Forecast** — the last three days of observed demand (dark line) then the 24-hour forecast (blue), with a dotted marker at the forecast start. The shaded band is the forecast ± the 95th percentile of absolute residuals the model made on a held-out validation week, so its width reflects how wrong the model has recently been, not a probabilistic guarantee. Gaps in the observed line are hours SMARD has indexed but not yet published.
 
-**Model comparison** — MAE, RMSE, and sMAPE for the seasonal-naive baseline and the gradient-boosting model, both trained on everything before the trailing 7-day holdout and scored on that holdout. This is the honesty check: the main model has to beat "same hour yesterday" to justify its complexity. Lower is better on all three metrics.
+**Model quality** — the full rolling-origin backtest from `reports/benchmark.md`: the three-model headline table, per-origin MAE for each model, prediction-interval coverage, permutation importance, and the champion's error slices. Below a divider, the fast trailing-7-day holdout comparison (seasonal-naive vs gradient boosting, with hour/weekday error slices) that runs live in the app. Both carry the same message: the main model has to beat "same hour yesterday" to justify its complexity.
 
-**Error slices (bar charts)** — the gradient-boosting model's mean absolute error on the holdout, split by local Berlin hour (left) and weekday (right). They show *where* the model struggles — typically the steep morning ramp and atypical days — rather than hiding it in one averaged number.
+**Anomalies** — observed demand against what the model expected for each hour (dashed), over a selectable 7/14/28-day window. The band is the expected value ± the 1st/99th percentile of validation residuals, learned from the week *before* the window so the bounds never see the data they score. Hours whose deviation leaves the band get a red ✕ and a table row with observed, expected, and deviation in MW. These are statistical flags — prompts to investigate weather, calendar, or grid events — not confirmed anomalies.
 
-**Historical anomaly explorer** — the trailing week of observed demand (solid) against what the model expected for each hour (dashed red). The light blue band is the expected value ± the 1st/99th percentile of validation residuals, learned from the week *before* this window so the bounds never see the data they score. Hours whose deviation leaves the band get a red ✕ and a row in the table below with the observed, expected, and deviation in MW. These are statistical flags — prompts to investigate weather, calendar, or grid events — not confirmed anomalies.
-
-**Data source and limitations (expander)** — the provenance of the exact SMARD snapshot in use (collection time, row count, time range, number of weekly chunks) from `data/clean/metadata.json`, plus the standing caveats about intervals and anomalies.
+**Data & methods** — the provenance of the exact SMARD snapshot in use (collection time, row count, time range, weekly-chunk count) from `data/clean/metadata.json`, plus a summary of the method (leakage-safe features, chronological evaluation, the honest baseline) and the standing caveats about intervals and anomalies.
 
 ## Run locally
 
@@ -67,6 +83,13 @@ pip install -e ".[dev]"
 pytest -q
 uvicorn energy_forecast.api:app --reload
 streamlit run app/streamlit_app.py
+```
+
+Rebuild the analysis artifacts from the clean snapshot:
+
+```bash
+PYTHONPATH=src python scripts/generate_eda.py    # reports/eda.md + figures
+PYTHONPATH=src python scripts/benchmark.py        # reports/benchmark.md + figures + metrics CSV
 ```
 
 API examples:
