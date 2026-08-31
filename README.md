@@ -44,7 +44,19 @@ The API and dashboard fall back to deterministic synthetic demo data when the cl
 
 ![Stromblick dashboard](reports/figures/dashboard.png)
 
-The Streamlit dashboard shows the 24-hour forecast with its residual interval band, a seasonal-naive vs. gradient-boosting comparison on the trailing week with error slices by local hour and weekday, and an anomaly explorer that marks hours whose deviation from the expected value leaves the 99% validation-residual bounds. Anomaly bounds are learned from the week *before* the scored window, so they never see the data they score.
+### Reading the dashboard
+
+**Header metrics** — the most recent observed demand in MW, the fixed 24-hour forecast horizon, and which data source is loaded ("SMARD clean export" for the real snapshot, or the deterministic demo series when `data/clean/demand_hourly.csv` is absent).
+
+**Next 24 hours** — the last three days of observed demand (dark blue) followed by the 24-hour forecast (light blue). The pink band is the prediction interval: the forecast ± the 95th percentile of absolute residuals the model made on a held-out validation week, so its width reflects how wrong the model has recently been, not a probabilistic guarantee. Gaps in the observed line are hours SMARD has indexed but not yet published.
+
+**Model comparison** — MAE, RMSE, and sMAPE for the seasonal-naive baseline and the gradient-boosting model, both trained on everything before the trailing 7-day holdout and scored on that holdout. This is the honesty check: the main model has to beat "same hour yesterday" to justify its complexity. Lower is better on all three metrics.
+
+**Error slices (bar charts)** — the gradient-boosting model's mean absolute error on the holdout, split by local Berlin hour (left) and weekday (right). They show *where* the model struggles — typically the steep morning ramp and atypical days — rather than hiding it in one averaged number.
+
+**Historical anomaly explorer** — the trailing week of observed demand (solid) against what the model expected for each hour (dashed red). The light blue band is the expected value ± the 1st/99th percentile of validation residuals, learned from the week *before* this window so the bounds never see the data they score. Hours whose deviation leaves the band get a red ✕ and a row in the table below with the observed, expected, and deviation in MW. These are statistical flags — prompts to investigate weather, calendar, or grid events — not confirmed anomalies.
+
+**Data source and limitations (expander)** — the provenance of the exact SMARD snapshot in use (collection time, row count, time range, number of weekly chunks) from `data/clean/metadata.json`, plus the standing caveats about intervals and anomalies.
 
 ## Run locally
 
