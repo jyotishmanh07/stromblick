@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .anomaly import detect_anomalies
 from .data import load_clean_demand
 from .models import HistGradientBoostingForecast, forecast_with_interval
 
@@ -47,7 +48,27 @@ class ForecastService:
         model = HistGradientBoostingForecast()
         model.fit(train)
         predictions = model.predict(pd.DatetimeIndex(validation.timestamp))
-        self.residuals = validation.demand_mw.to_numpy() - predictions
+        residuals = validation.demand_mw.to_numpy() - predictions
+        self.residuals = residuals[~np.isnan(residuals)]  # hours with no observed demand
+
+    def detect_recent_anomalies(
+        self, window_hours: int = 24 * 7, quantile: float = 0.99
+    ) -> pd.DataFrame:
+        """Score the trailing window against residual bounds learned strictly before it."""
+        validation_hours = 24 * 7
+        if len(self.history) <= window_hours + validation_hours + 200:
+            return pd.DataFrame()
+        window = self.history.iloc[-window_hours:].reset_index(drop=True)
+        earlier = self.history.iloc[:-window_hours]
+        validation = earlier.iloc[-validation_hours:]
+        residual_model = HistGradientBoostingForecast().fit(earlier.iloc[:-validation_hours])
+        residuals = validation.demand_mw.to_numpy() - residual_model.predict(
+            pd.DatetimeIndex(validation.timestamp)
+        )
+        residuals = residuals[~np.isnan(residuals)]  # hours with no observed demand
+        window_model = HistGradientBoostingForecast().fit(earlier)
+        predicted = window_model.predict(pd.DatetimeIndex(window.timestamp))
+        return detect_anomalies(window, predicted, residuals, quantile)
 
     def forecast(self, as_of: pd.Timestamp, horizon_hours: int) -> dict[str, object]:
         output = forecast_with_interval(
