@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from .anomaly import detect_anomalies
-from .data import load_clean_demand
+from .data import DataValidationError, load_clean_demand
+from .live import COMMITTED_LABEL, fetch_live_history, last_observed
 from .models import HistGradientBoostingForecast, forecast_with_interval
 
 
@@ -27,16 +28,43 @@ def demo_demand(hours: int = 24 * 90) -> pd.DataFrame:
 
 
 class ForecastService:
-    def __init__(self, data_path: str | Path = "data/clean/demand_hourly.csv") -> None:
+    def __init__(
+        self, data_path: str | Path = "data/clean/demand_hourly.csv", live: bool = False,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        """Load history and prepare the interval model.
+
+        `live=True` additionally pulls the recent tail from SMARD and merges it onto
+        the committed snapshot, so the forecast starts from the last published hour
+        rather than from whenever the snapshot was collected. It defaults to off:
+        `api.py` builds this at module import, and a network call there would slow
+        every startup and put the API tests on the network.
+        """
+        self.is_live = False
+        self.provenance: dict | None = None
+        self.live_warning: str | None = None
         try:
             self.history = load_clean_demand(data_path)
-            self.data_source = "SMARD clean export"
-        except FileNotFoundError:
+            self.data_source = COMMITTED_LABEL
+        except (FileNotFoundError, DataValidationError):
+            # A corrupt snapshot degrades to demo data rather than taking the app down.
             self.history = demo_demand()
             self.data_source = "deterministic demo data (download SMARD data for production use)"
+        if live and self.data_source == COMMITTED_LABEL:
+            result = fetch_live_history(self.history, timeout_seconds=timeout_seconds)
+            self.history = result.history
+            self.data_source = result.source_label
+            self.is_live = result.is_live
+            self.provenance = result.provenance
+            self.live_warning = result.warning
         self.model = HistGradientBoostingForecast()
         self.residuals = np.array([])
         self._fit_validation_residuals()
+
+    @property
+    def last_observed(self) -> pd.Timestamp | None:
+        """Most recent hour with a published value — the correct forecast origin."""
+        return last_observed(self.history)
 
     def _fit_validation_residuals(self) -> None:
         """Learn interval width from a trailing, one-week validation window."""
