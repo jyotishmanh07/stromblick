@@ -15,6 +15,10 @@ env/
 data/raw/
 data/clean/*.csv
 
+# DuckDB reporting warehouse — derived from the snapshot, rebuilt by scripts/build_warehouse.py
+*.duckdb
+*.duckdb.wal
+
 # keep directory structure, provenance, and the demand snapshot under version control
 # (the snapshot is committed so the deployed dashboard serves real data; CC BY 4.0,
 #  Bundesnetzagentur | SMARD.de — see data/clean/metadata.json)
