@@ -4,7 +4,7 @@
 
 **Germany Electricity Demand Forecasting & Anomaly Detection**
 
-🔗 **Live dashboard:** _deploy on [Streamlit Community Cloud](https://share.streamlit.io) with `app/streamlit_app.py` and paste the URL here._ The deployed app pulls the latest data from the SMARD API on load (cached hourly) and forecasts forward from the most recent published hour, so the demo stays current rather than frozen at the committed snapshot.
+🔗 **Live dashboard: [stromblick.streamlit.app](https://stromblick.streamlit.app/)** — pulls the latest data from the SMARD API on load (cached hourly) and forecasts forward from the most recent published hour, so the demo stays current rather than frozen at the committed snapshot.
 
 Stromblick forecasts Germany's electricity demand for the next 24 hours and highlights unusually high or low demand. It demonstrates data validation, time-series feature engineering, chronological evaluation, statistical reasoning, SQL, Python, an API, a dashboard, automated tests, and Docker.
 
