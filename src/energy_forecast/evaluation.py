@@ -7,7 +7,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from .features import add_features
+from .features import german_holidays
 
 
 def smape(actual: np.ndarray, predicted: np.ndarray) -> float:
@@ -53,7 +53,8 @@ def error_slices(actual_frame: pd.DataFrame, predicted: np.ndarray) -> dict[str,
     data["hour"] = local.dt.hour
     data["weekday"] = local.dt.day_name()
     data["month"] = local.dt.month
-    data["is_public_holiday"] = add_features(data)["is_public_holiday"]
+    holidays = german_holidays(set(local.dt.year.unique()))
+    data["is_public_holiday"] = local.dt.date.isin(holidays).astype(int)
     return {
         "hour": data.groupby("hour", as_index=False).absolute_error.mean(),
         "weekday": data.groupby("weekday", as_index=False).absolute_error.mean(),

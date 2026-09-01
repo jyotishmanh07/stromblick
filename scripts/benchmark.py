@@ -12,13 +12,22 @@ import argparse
 import json
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 import pandas as pd
 
+matplotlib.use("Agg")  # report script: never open a GUI window
+import matplotlib.pyplot as plt  # noqa: E402
+
 from energy_forecast.data import load_clean_demand
 from energy_forecast.evaluation import error_slices, metrics
-from energy_forecast.features import FEATURE_COLUMNS, add_features
+from energy_forecast.features import FEATURE_COLUMNS, add_features, german_holidays
+from energy_forecast.inference import (
+    coverage_test,
+    diebold_mariano,
+    paired_model_comparison,
+    slice_difference_test,
+)
 from energy_forecast.models import (
     HistGradientBoostingForecast,
     SARIMAXBaseline,
@@ -32,7 +41,12 @@ FIG_DIR = Path("reports/figures")
 REPORT_PATH = Path("reports/benchmark.md")
 METRICS_PATH = Path("reports/benchmark_metrics.csv")
 HOURLY_PATH = Path("reports/benchmark_champion_hourly.csv")
+POOLED_PATH = Path("reports/benchmark_pooled_hourly.csv")
 SUMMARY_PATH = Path("reports/benchmark_summary.json")
+TUNING_SUMMARY_PATH = Path("reports/tuning_summary.json")
+README_PATH = Path("README.md")
+RESULTS_START = "<!-- RESULTS-TABLE:START"
+RESULTS_END = "<!-- RESULTS-TABLE:END -->"
 
 MODEL_FACTORIES = {
     "Seasonal naive": SeasonalNaive,
@@ -165,6 +179,7 @@ def interval_coverage(
     ordered = sorted(pooled_champion.origin.unique())
     inside = scored = 0
     widths: list[float] = []
+    per_origin_rates: list[float] = []
     for i, origin in enumerate(ordered):
         if i < min_prior_origins:
             continue
@@ -174,15 +189,122 @@ def interval_coverage(
         spread = float(np.quantile(np.abs(prior.demand_mw - prior.predicted), residual_quantile))
         actual = current.demand_mw.to_numpy()
         predicted = current.predicted.to_numpy()
-        inside += int(np.sum((actual >= predicted - spread) & (actual <= predicted + spread)))
+        hit = (actual >= predicted - spread) & (actual <= predicted + spread)
+        inside += int(np.sum(hit))
         scored += len(actual)
         widths.append(2 * spread)
+        per_origin_rates.append(float(np.mean(hit)))
     return {
         "nominal": 100 * residual_quantile,
         "empirical": 100 * inside / scored if scored else float("nan"),
         "hours_scored": scored,
         "mean_band_mw": float(np.mean(widths)) if widths else float("nan"),
+    }, per_origin_rates
+
+
+def significance(
+    per_origin: pd.DataFrame, pooled: dict[str, pd.DataFrame], champion: str,
+    coverage_rates: list[float], residual_quantile: float = 0.95,
+) -> dict[str, object]:
+    """Test the headline claims: is the champion's win real, and is coverage on target?"""
+    wide = per_origin.pivot(index="origin", columns="model", values="mae").dropna()
+    comparisons: dict[str, dict[str, float]] = {}
+    for rival in (name for name in MODEL_FACTORIES if name != champion):
+        paired = paired_model_comparison(wide[champion].to_numpy(), wide[rival].to_numpy())
+        merged = pooled[champion].merge(
+            pooled[rival][["origin", "timestamp", "predicted"]],
+            on=["origin", "timestamp"], suffixes=("", "_rival"),
+        )
+        dm = diebold_mariano(
+            np.abs(merged.demand_mw - merged.predicted).to_numpy(),
+            np.abs(merged.demand_mw - merged.predicted_rival).to_numpy(),
+        )
+        comparisons[rival] = {**paired, **{f"dm_{k}": v for k, v in dm.items()}}
+
+    hourly = pooled[champion].copy()
+    local = pd.to_datetime(hourly.timestamp, utc=True).dt.tz_convert("Europe/Berlin")
+    holidays = german_holidays(set(local.dt.year.unique()))
+    is_holiday = local.dt.date.isin(holidays).to_numpy()
+    # A short evaluation span can contain no holidays at all; report nothing rather than guess.
+    holiday_slice = (
+        slice_difference_test(np.abs(hourly.demand_mw - hourly.predicted).to_numpy(), is_holiday)
+        if is_holiday.any() and not is_holiday.all() else None
+    )
+    return {
+        "comparisons": comparisons,
+        "holiday_slice": holiday_slice,
+        "coverage": coverage_test(coverage_rates, nominal=residual_quantile),
     }
+
+
+def tuning_section() -> list[str]:
+    """Describe the shipped hyperparameters, citing the search that justifies them.
+
+    Reads reports/tuning_summary.json rather than asserting a result: a claim about a
+    sweep that leaves no artifact behind is one a reader cannot check.
+    """
+    shipped = ", ".join(
+        f"`{k}={v}`" for k, v in HistGradientBoostingForecast.DEFAULT_PARAMS.items()
+    )
+    if not TUNING_SUMMARY_PATH.exists():
+        return [
+            f"The gradient-boosting settings in `models.py` ({shipped}) are the shipped defaults. "
+            "Run `PYTHONPATH=src python scripts/tune.py` to search around them; that script "
+            "writes `reports/tuning.md` and this section then cites its verdict.",
+            "",
+        ]
+    tuning = json.loads(TUNING_SUMMARY_PATH.read_text())
+    comparison = tuning["comparison"]
+    inner_delta = 100 * (
+        tuning["inner_best_mae"] - tuning["inner_default_mae"]
+    ) / tuning["inner_default_mae"]
+    outer_delta = 100 * (
+        tuning["outer_tuned_mae"] - tuning["outer_default_mae"]
+    ) / tuning["outer_default_mae"]
+    verdict = (
+        "The tuned configuration was **adopted**: its advantage on unseen origins clears the "
+        "paired-bootstrap interval."
+        if tuning["adopt_tuned"] else
+        f"The shipped defaults are **kept**. The tuned configuration is only "
+        f"{abs(outer_delta):.1f}% better on origins the search never saw, and the "
+        "confidence interval on that difference "
+        "contains zero — the gain is smaller than the variation between origins. Adopting it "
+        "would be fitting the search rather than improving the model."
+    )
+    return [
+        f"The gradient-boosting settings in `models.py` ({shipped}) were checked with a "
+        f"**nested rolling-origin search**: {tuning['trials']} Optuna TPE trials scored on "
+        f"{tuning['inner_origins']} origins drawn only from the training span, then confirmed on "
+        f"{tuning['outer_origins']} later origins the search never saw.",
+        "",
+        f"The search did find a better inner score ({tuning['inner_best_mae']:,.0f} vs "
+        f"{tuning['inner_default_mae']:,.0f} MW, {inner_delta:+.1f}%). On the held-out origins "
+        f"that shrank to {tuning['outer_tuned_mae']:,.0f} vs {tuning['outer_default_mae']:,.0f} MW "
+        f"({outer_delta:+.1f}%), a mean difference of {comparison['mean_diff']:,.0f} MW with a "
+        f"95% CI of [{comparison['ci_lower']:,.0f}, {comparison['ci_upper']:,.0f}] "
+        f"(Wilcoxon p = {comparison['wilcoxon_p']:.2f}).",
+        "",
+        verdict,
+        "",
+        "That gap between the inner and outer numbers is the reason for the nesting. A search "
+        "almost always improves the score on the data it searched; only the held-out comparison "
+        "says whether anything was learned. Full detail in [tuning.md](tuning.md).",
+        "",
+    ]
+
+
+def sync_readme_results(table: list[str], preamble: str, verdict: str) -> bool:
+    """Rewrite the README's RESULTS-TABLE block so it cannot drift from the benchmark."""
+    if not README_PATH.exists():
+        return False
+    text = README_PATH.read_text(encoding="utf-8")
+    start, end = text.find(RESULTS_START), text.find(RESULTS_END)
+    if start == -1 or end == -1:
+        return False
+    marker_end = text.find("-->", start) + len("-->")
+    block = "\n".join(["", preamble, "", *table, "", verdict, ""])
+    README_PATH.write_text(text[:marker_end] + block + text[end:], encoding="utf-8")
+    return True
 
 
 def plot_feature_importance(
@@ -263,9 +385,13 @@ def main() -> None:
 
     per_origin.to_csv(METRICS_PATH, index=False)
     pooled[champion].to_csv(HOURLY_PATH, index=False)
+    pd.concat(
+        [frame_.assign(model=name) for name, frame_ in pooled.items()], ignore_index=True
+    ).to_csv(POOLED_PATH, index=False)
     plot_mae_by_origin(per_origin, FIG_DIR / "benchmark_mae_by_origin.png")
     notes = plot_error_slices(pooled[champion], champion, FIG_DIR / "benchmark_error_slices.png")
-    coverage = interval_coverage(pooled[champion])
+    coverage, coverage_rates = interval_coverage(pooled[champion])
+    tests = significance(per_origin, pooled, champion, coverage_rates)
     importance = (
         plot_feature_importance(frame, FIG_DIR / "benchmark_feature_importance.png")
         if champion == "HistGradientBoosting" else None
@@ -295,6 +421,61 @@ def main() -> None:
         f"{notes['ordinary_mae']:,.0f} MW on ordinary days"
         if notes["holiday_mae"] else "The evaluation span contained no public-holiday hours"
     )
+
+    significance_rows = [
+        "| Comparison | Mean per-origin MAE gap (MW) | 95% CI | Wilcoxon p | DM p |",
+        "|---|---|---|---|---|",
+    ]
+    for rival, stat in tests["comparisons"].items():
+        significance_rows.append(
+            f"| {champion} − {rival} | {stat['mean_diff']:,.0f} | "
+            f"[{stat['ci_lower']:,.0f}, {stat['ci_upper']:,.0f}] | "
+            f"{stat['wilcoxon_p']:.2e} | {stat['dm_p_value']:.2e} |"
+        )
+    beats_all = all(s["ci_upper"] < 0 for s in tests["comparisons"].values())
+    verdict = (
+        "The gap is statistically significant against both rivals, not sampling noise."
+        if beats_all else
+        "At least one comparison's confidence interval contains zero — treat that gap as unproven."
+    )
+    cov = tests["coverage"]
+    hol = tests["holiday_slice"]
+    coverage_verdict = (
+        "below the nominal target by a margin the data can resolve"
+        if cov["ci_upper"] < cov["nominal"] else "statistically indistinguishable from nominal"
+    )
+    holiday_significance = (
+        [
+            f"**Holiday penalty:** public-holiday hours cost {hol['mean_diff']:,.0f} MW more "
+            f"absolute error than ordinary hours (95% CI [{hol['ci_lower']:,.0f}, "
+            f"{hol['ci_upper']:,.0f}], permutation p = {hol['permutation_p']:.2e}, Cohen's d = "
+            f"{hol['cohens_d']:.2f}) over {hol['n_slice']:,} holiday hours against "
+            f"{hol['n_rest']:,} ordinary ones. This is the clearest weakness in the champion and "
+            "the first place to spend more feature work.",
+            "",
+        ]
+        if hol is not None else []
+    )
+    significance_section = [
+        "### Is the win statistically significant?",
+        "",
+        *significance_rows,
+        "",
+        f"Per-origin MAE across the {tests['comparisons'][next(iter(tests['comparisons']))]['n']} "
+        "paired origins is the sampling unit: hours inside one 24-hour window share weather and "
+        "demand level, so treating them as independent would overstate confidence. The CI is a "
+        "paired bootstrap (10,000 resamples) on the mean difference; negative means the champion "
+        "errs less. The Diebold-Mariano column tests the same claim on hourly losses with a "
+        f"Harvey-Leybourne-Newbold correction for 24-step serial dependence. {verdict}",
+        "",
+        f"**Interval coverage:** mean per-origin coverage is {100 * cov['mean_coverage']:.1f}% "
+        f"(95% CI [{100 * cov['ci_lower']:.1f}%, {100 * cov['ci_upper']:.1f}%]) against the "
+        f"{100 * cov['nominal']:.0f}% nominal target across {cov['n_origins']} origins — "
+        f"{coverage_verdict} (p = {cov['p_value']:.2e}). Per-origin rates are the unit here for "
+        "the same reason.",
+        "",
+        *holiday_significance,
+    ]
     importance_section: list[str] = []
     if importance is not None:
         ranked = ", ".join(
@@ -337,6 +518,7 @@ def main() -> None:
         "the honest yardstick: a model that cannot beat \"same hour yesterday, last week as "
         "fallback\" is not earning its complexity.",
         "",
+        *significance_section,
         "## Prediction-interval coverage",
         "",
         f"The shipped interval is {champion}'s forecast ± the {coverage['nominal']:.0f}th "
@@ -365,14 +547,7 @@ def main() -> None:
         "",
         "## Model configuration",
         "",
-        "The gradient-boosting settings in `models.py` "
-        "(`learning_rate=0.06`, `max_iter=250`, `max_leaf_nodes=31`, `l2_regularization=1.0`) "
-        "were checked with a seven-config rolling-origin sweep over 30 daily origins, varying "
-        "learning rate (0.03–0.10), tree count (150–500), leaf count (15–63), and L2 penalty "
-        "(0.1–1.0). Mean 24-hour MAE moved by under 5% across every config and all of them sat "
-        "inside one standard deviation of each other, so the defaults are kept: nothing in the "
-        "neighbourhood beat them by a margin the backtest could resolve.",
-        "",
+        *tuning_section(),
         "## Reproduce",
         "",
         "```bash",
@@ -409,6 +584,18 @@ def main() -> None:
                     for name, row in summary.iterrows()
                 },
                 "interval_coverage": {k: round(float(v), 2) for k, v in coverage.items()},
+                "significance": {
+                    "comparisons": {
+                        rival: {k: round(float(v), 4) for k, v in stat.items()}
+                        for rival, stat in tests["comparisons"].items()
+                    },
+                    "holiday_slice": (
+                        {k: round(float(v), 4) for k, v in tests["holiday_slice"].items()}
+                        if tests["holiday_slice"] is not None else None
+                    ),
+                    "coverage": {k: round(float(v), 4) for k, v in tests["coverage"].items()},
+                    "champion_beats_all_rivals": bool(beats_all),
+                },
                 "top_features": [list(pair) for pair in (importance or {}).get("top_features", [])],
                 "worst_hour": int(notes["worst_hour"]),
             },
@@ -417,11 +604,25 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    # The closest rival is the one the champion beats by the smallest margin.
+    worst = max(tests["comparisons"].values(), key=lambda s: s["mean_diff"])
+    synced = sync_readme_results(
+        table,
+        f"{origins_used} daily origins, first after {args.initial_train_days} days of history, "
+        f"each scored on the next {args.horizon_hours} hours ({eval_hours:,} forecast hours, "
+        f"{test_start:%b %Y} – {test_end:%b %Y}):",
+        f"Paired bootstrap over the {worst['n']} origins puts the champion's MAE advantage at "
+        f"[{-worst['ci_upper']:,.0f}, {-worst['ci_lower']:,.0f}] MW against its closest rival "
+        f"(Wilcoxon p = {worst['wilcoxon_p']:.1e}) — see "
+        "[reports/benchmark.md](reports/benchmark.md) for the full significance section.",
+    )
+
     figures = 3 + (importance is not None)
     print(
-        f"\nWrote {REPORT_PATH}, {METRICS_PATH}, {HOURLY_PATH}, {SUMMARY_PATH}, and "
+        f"\nWrote {REPORT_PATH}, {METRICS_PATH}, {HOURLY_PATH}, {POOLED_PATH}, {SUMMARY_PATH}, and "
         f"{figures} figures to {FIG_DIR}/"
     )
+    print(f"README results block: {'rewritten' if synced else 'NOT found — markers missing'}")
     print(
         f"Interval coverage: {coverage['empirical']:.1f}% empirical vs "
         f"{coverage['nominal']:.0f}% nominal over {coverage['hours_scored']:,} hours"
