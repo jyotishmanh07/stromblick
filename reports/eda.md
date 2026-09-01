@@ -2,6 +2,8 @@
 
 Snapshot: `2025-09-07 22:00:00+00:00` to `2026-08-31 07:00:00+00:00` (8,578 hourly rows). Source: Bundesnetzagentur | SMARD.de, module 410 (Germany actual total grid load), CC BY 4.0.
 
+Every figure below is a SQL aggregation over the DuckDB warehouse built from that snapshot (`sql/`, rebuilt by `scripts/build_warehouse.py`).
+
 - Mean demand: 53,868 MW
 - Peak: 78,241 MW; trough: 32,607 MW
 - Missing hourly timestamps (gaps in the index): 0
@@ -27,3 +29,7 @@ Weekday demand peaks around 64,002 MW; weekend peaks are lower (~53,132 MW) and 
 ## Monthly pattern
 
 ![Monthly pattern](figures/monthly_pattern.png)
+
+## Public holidays
+
+Across 216 public-holiday hours mean demand is 45,175 MW against 54,093 MW on 8,348 ordinary hours — a 16% drop. Holidays are also the champion model's weakest slice; see [benchmark.md](benchmark.md).

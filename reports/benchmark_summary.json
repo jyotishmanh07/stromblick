@@ -36,6 +36,48 @@
     "hours_scored": 7810.0,
     "mean_band_mw": 11149.8
   },
+  "significance": {
+    "comparisons": {
+      "Seasonal naive": {
+        "mean_diff": -1990.6944,
+        "ci_lower": -2345.152,
+        "ci_upper": -1629.9585,
+        "wilcoxon_p": 0.0,
+        "n": 329.0,
+        "dm_dm_stat": -10.7062,
+        "dm_p_value": 0.0,
+        "dm_n": 7882.0
+      },
+      "SARIMAX": {
+        "mean_diff": -1422.1071,
+        "ci_lower": -1746.1576,
+        "ci_upper": -1100.0934,
+        "wilcoxon_p": 0.0,
+        "n": 329.0,
+        "dm_dm_stat": -8.8724,
+        "dm_p_value": 0.0,
+        "dm_n": 7882.0
+      }
+    },
+    "holiday_slice": {
+      "mean_diff": 2740.6617,
+      "ci_lower": 2168.9712,
+      "ci_upper": 3311.912,
+      "permutation_p": 0.0002,
+      "cohens_d": 1.3474,
+      "n_slice": 192.0,
+      "n_rest": 7690.0
+    },
+    "coverage": {
+      "mean_coverage": 0.9317,
+      "ci_lower": 0.9151,
+      "ci_upper": 0.947,
+      "nominal": 0.95,
+      "p_value": 0.0251,
+      "n_origins": 326.0
+    },
+    "champion_beats_all_rivals": true
+  },
   "top_features": [
     [
       "lag_1h",

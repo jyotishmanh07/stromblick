@@ -1,0 +1,72 @@
+{
+  "high_demand": {
+    "label": "High-demand day",
+    "champion": "HistGradientBoosting",
+    "scored_days": 199,
+    "labelled_days": 319,
+    "models": {
+      "HistGradientBoosting": {
+        "pr_auc": 0.5982,
+        "pr_auc_lift": 3.052,
+        "roc_auc": 0.821,
+        "brier": 0.1385,
+        "base_rate": 0.196
+      },
+      "Calendar logistic": {
+        "pr_auc": 0.2478,
+        "pr_auc_lift": 1.265,
+        "roc_auc": 0.6603,
+        "brier": 0.2424,
+        "base_rate": 0.196
+      },
+      "Majority class": {
+        "pr_auc": 0.1477,
+        "pr_auc_lift": 0.754,
+        "roc_auc": 0.3578,
+        "brier": 0.1844,
+        "base_rate": 0.196
+      }
+    },
+    "operating_point": {
+      "threshold": 0.05,
+      "precision": 0.3261,
+      "recall": 0.7692,
+      "flagged": 92
+    }
+  },
+  "anomaly": {
+    "label": "Anomaly day",
+    "champion": "HistGradientBoosting",
+    "scored_days": 198,
+    "labelled_days": 318,
+    "models": {
+      "HistGradientBoosting": {
+        "pr_auc": 0.7187,
+        "pr_auc_lift": 7.906,
+        "roc_auc": 0.9062,
+        "brier": 0.0491,
+        "base_rate": 0.0909
+      },
+      "Calendar logistic": {
+        "pr_auc": 0.7156,
+        "pr_auc_lift": 7.871,
+        "roc_auc": 0.9281,
+        "brier": 0.114,
+        "base_rate": 0.0909
+      },
+      "Majority class": {
+        "pr_auc": 0.0847,
+        "pr_auc_lift": 0.932,
+        "roc_auc": 0.4745,
+        "brier": 0.0838,
+        "base_rate": 0.0909
+      }
+    },
+    "operating_point": {
+      "threshold": 0.15,
+      "precision": 0.6364,
+      "recall": 0.7778,
+      "flagged": 22
+    }
+  }
+}

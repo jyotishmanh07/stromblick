@@ -16,6 +16,19 @@ MAE and RMSE are the mean across origins; the value in parentheses is the MAE st
 
 **HistGradientBoosting** has the lowest error, cutting MAE by **50.6%** against the seasonal-naive baseline (1,944 vs 3,935 MW). The baseline is the honest yardstick: a model that cannot beat "same hour yesterday, last week as fallback" is not earning its complexity.
 
+### Is the win statistically significant?
+
+| Comparison | Mean per-origin MAE gap (MW) | 95% CI | Wilcoxon p | DM p |
+|---|---|---|---|---|
+| HistGradientBoosting − Seasonal naive | -1,991 | [-2,345, -1,630] | 9.42e-21 | 1.45e-26 |
+| HistGradientBoosting − SARIMAX | -1,422 | [-1,746, -1,100] | 2.03e-16 | 8.74e-19 |
+
+Per-origin MAE across the 329 paired origins is the sampling unit: hours inside one 24-hour window share weather and demand level, so treating them as independent would overstate confidence. The CI is a paired bootstrap (10,000 resamples) on the mean difference; negative means the champion errs less. The Diebold-Mariano column tests the same claim on hourly losses with a Harvey-Leybourne-Newbold correction for 24-step serial dependence. The gap is statistically significant against both rivals, not sampling noise.
+
+**Interval coverage:** mean per-origin coverage is 93.2% (95% CI [91.5%, 94.7%]) against the 95% nominal target across 326 origins — below the nominal target by a margin the data can resolve (p = 2.51e-02). Per-origin rates are the unit here for the same reason.
+
+**Holiday penalty:** public-holiday hours cost 2,741 MW more absolute error than ordinary hours (95% CI [2,169, 3,312], permutation p = 2.00e-04, Cohen's d = 1.35) over 192 holiday hours against 7,690 ordinary ones. This is the clearest weakness in the champion and the first place to spend more feature work.
+
 ## Prediction-interval coverage
 
 The shipped interval is HistGradientBoosting's forecast ± the 95th percentile of absolute residuals from *earlier* origins (the same recipe the service uses). Walking that band forward across 7,810 scored hours, **93.2%** of observed values land inside it against a 95% nominal target, at a mean band width of 11,150 MW. This is an empirical magnitude band, not a calibrated probabilistic interval.
@@ -40,7 +53,13 @@ MAE for HistGradientBoosting broken down by local hour, weekday, calendar month,
 
 ## Model configuration
 
-The gradient-boosting settings in `models.py` (`learning_rate=0.06`, `max_iter=250`, `max_leaf_nodes=31`, `l2_regularization=1.0`) were checked with a seven-config rolling-origin sweep over 30 daily origins, varying learning rate (0.03–0.10), tree count (150–500), leaf count (15–63), and L2 penalty (0.1–1.0). Mean 24-hour MAE moved by under 5% across every config and all of them sat inside one standard deviation of each other, so the defaults are kept: nothing in the neighbourhood beat them by a margin the backtest could resolve.
+The gradient-boosting settings in `models.py` (`max_iter=250`, `learning_rate=0.06`, `max_leaf_nodes=31`, `l2_regularization=1.0`) were checked with a **nested rolling-origin search**: 40 Optuna TPE trials scored on 12 origins drawn only from the training span, then confirmed on 60 later origins the search never saw.
+
+The search did find a better inner score (2,573 vs 2,665 MW, -3.5%). On the held-out origins that shrank to 1,567 vs 1,587 MW (-1.3%), a mean difference of -20 MW with a 95% CI of [-82, 44] (Wilcoxon p = 0.38).
+
+The shipped defaults are **kept**. The tuned configuration is only 1.3% better on origins the search never saw, and the confidence interval on that difference contains zero — the gain is smaller than the variation between origins. Adopting it would be fitting the search rather than improving the model.
+
+That gap between the inner and outer numbers is the reason for the nesting. A search almost always improves the score on the data it searched; only the held-out comparison says whether anything was learned. Full detail in [tuning.md](tuning.md).
 
 ## Reproduce
 

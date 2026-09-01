@@ -1,0 +1,31 @@
+{
+  "trials": 40,
+  "seed": 42,
+  "inner_origins": 12,
+  "outer_origins": 60,
+  "default_params": {
+    "max_iter": 250,
+    "learning_rate": 0.06,
+    "max_leaf_nodes": 31,
+    "l2_regularization": 1.0
+  },
+  "tuned_params": {
+    "learning_rate": 0.05575967547629563,
+    "max_iter": 500,
+    "max_leaf_nodes": 23,
+    "min_samples_leaf": 20,
+    "l2_regularization": 0.003399214253595694
+  },
+  "inner_best_mae": 2572.8,
+  "inner_default_mae": 2665.0,
+  "outer_tuned_mae": 1566.7,
+  "outer_default_mae": 1586.8,
+  "comparison": {
+    "mean_diff": -20.1315,
+    "ci_lower": -81.623,
+    "ci_upper": 44.3945,
+    "wilcoxon_p": 0.381,
+    "n": 60.0
+  },
+  "adopt_tuned": false
+}
