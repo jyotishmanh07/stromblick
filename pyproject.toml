@@ -27,6 +27,13 @@ dev = ["pytest>=8,<9", "ruff>=0.5,<1", "matplotlib>=3.8,<4"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.poetry]
+# Streamlit Community Cloud installs dependencies with Poetry whenever a
+# pyproject.toml is present. The distribution is "stromblick" but the import
+# package is energy_forecast under src/ — point Poetry at it so `poetry install`
+# builds the project instead of failing to find a "stromblick" folder.
+packages = [{ include = "energy_forecast", from = "src" }]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
