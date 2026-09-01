@@ -1,11 +1,21 @@
 """Streamlit product interface; run with `streamlit run app/streamlit_app.py`."""
 
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+# Import energy_forecast from the repo checkout rather than site-packages.
+# Streamlit Community Cloud re-reads this file from git on every pull but only
+# reinstalls dependencies when requirements.txt *changes* — and requirements.txt is
+# just ".", which pip *copies* into site-packages. So a pull that adds a new module
+# leaves the app running new UI code against a stale installed package, and the import
+# fails until someone reboots. Pointing at src/ keeps the two in lockstep.
+# Harmless elsewhere: a missing src/ is ignored and the installed package is used.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from energy_forecast.evaluation import error_slices, metrics
 from energy_forecast.events import HighDemandClassifier, daily_feature_frame
@@ -24,6 +34,26 @@ from energy_forecast.theme import (
 )
 
 GBM = MODEL_COLORS["HistGradientBoosting"]
+BERLIN = "Europe/Berlin"
+
+
+def unpublished_spans(frame: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Contiguous runs of hours with no published value, as (start, end) in local time.
+
+    Returned spans are widened by half an hour on each side so a single missing hour is
+    still visible as a band rather than a hairline.
+    """
+    missing = frame[frame.demand_mw.isna()]
+    if missing.empty:
+        return []
+    local = missing.local.reset_index(drop=True)
+    breaks = local.diff() > pd.Timedelta(hours=1)
+    spans = []
+    for _, run in local.groupby(breaks.cumsum()):
+        spans.append(
+            (run.iloc[0] - pd.Timedelta(minutes=30), run.iloc[-1] + pd.Timedelta(minutes=30))
+        )
+    return spans
 
 WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 REPORTS = Path("reports")
@@ -159,47 +189,76 @@ forecast_tab, quality_tab, anomaly_tab, event_tab, about_tab = st.tabs(
 # --------------------------------------------------------------------------------------
 with forecast_tab:
     st.subheader("Next 24 hours")
-    observed = history.tail(72)  # keep NaN rows so unpublished hours render as gaps
+    observed = history.tail(72).copy()  # keep NaN rows so unpublished hours render as gaps
     last_observed_ts = history.dropna(subset=["demand_mw"]).timestamp.iloc[-1]
+    # Demand follows the German working day, so plot in local time: a trough labelled
+    # 03:00 UTC is really 05:00 in Berlin, which makes the daily shape read wrong.
+    observed["local"] = observed.timestamp.dt.tz_convert(BERLIN)
+    forecast_local = forecast.timestamp.dt.tz_convert(BERLIN)
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            x=forecast.timestamp, y=forecast.upper_bound,
+            x=forecast_local, y=forecast.upper_bound,
             line=dict(width=0), hoverinfo="skip", showlegend=False,
         )
     )
     fig.add_trace(
         go.Scatter(
-            x=forecast.timestamp, y=forecast.lower_bound,
+            x=forecast_local, y=forecast.lower_bound,
             name="Prediction interval", fill="tonexty", fillcolor=INTERVAL_FILL,
             line=dict(width=0), hoverinfo="skip",
         )
     )
     fig.add_trace(
         go.Scatter(
-            x=observed.timestamp, y=observed.demand_mw, name="Observed",
+            x=observed.local, y=observed.demand_mw, name="Observed",
             line=dict(color=OBSERVED, width=2),
         )
     )
     fig.add_trace(
         go.Scatter(
-            x=forecast.timestamp, y=forecast.prediction, name="Forecast",
+            x=forecast_local, y=forecast.prediction, name="Forecast",
             line=dict(color=FORECAST, width=2.5),
         )
     )
+    # Shade runs of unpublished hours. Without this a reporting gap looks identical to
+    # demand collapsing to zero — the line simply stops and resumes at a different level.
+    gaps = unpublished_spans(observed)
+    for start, end in gaps:
+        fig.add_vrect(
+            x0=start.timestamp() * 1000, x1=end.timestamp() * 1000,
+            fillcolor=MUTED, opacity=0.13, line_width=0, layer="below",
+        )
+    if gaps:
+        mid = gaps[0][0] + (gaps[0][1] - gaps[0][0]) / 2
+        fig.add_annotation(
+            x=mid.timestamp() * 1000, yref="paper", y=0.5, text="not yet<br>published",
+            showarrow=False, font=dict(size=10, color=MUTED),
+        )
     # epoch-ms is the form plotly reliably accepts for a vline on a datetime axis
     fig.add_vline(
-        x=last_observed_ts.timestamp() * 1000,
+        x=last_observed_ts.tz_convert(BERLIN).timestamp() * 1000,
         line=dict(color=MUTED, width=1, dash="dot"),
     )
-    fig.update_layout(**plotly_layout(yaxis_title="Demand (MW)", xaxis_title="Time (UTC)"))
+    fig.update_layout(
+        **plotly_layout(yaxis_title="Demand (MW)", xaxis_title="Time (Europe/Berlin)")
+    )
     st.plotly_chart(fig, width="stretch")
+    gap_note = (
+        f" The {len(gaps)} shaded band{'s' if len(gaps) > 1 else ''} mark hours SMARD has "
+        "indexed but not yet published — missing readings, not a drop in demand. They are "
+        "reported rather than imputed."
+        if gaps else
+        " Gaps in the observed line would mark hours SMARD has indexed but not yet published; "
+        "there are none in this window."
+    )
     st.caption(
         "Observed demand for the last three days, then the 24-hour forecast (the dotted line "
-        "marks the forecast start). The shaded band is the forecast ± the 95th percentile of "
-        "absolute residuals the model made on a held-out validation week — its width reflects "
-        "how wrong the model has recently been, not a probabilistic guarantee. Gaps in the "
-        "observed line are hours SMARD has indexed but not yet published."
+        "marks the forecast start). Times are Europe/Berlin, the timezone demand actually "
+        "follows. The shaded band around the forecast is ± the 95th percentile of absolute "
+        "residuals the model made on a held-out validation week — its width reflects how wrong "
+        "the model has recently been, not a probabilistic guarantee." + gap_note
     )
 
 
