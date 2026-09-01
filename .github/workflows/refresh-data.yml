@@ -1,0 +1,73 @@
+name: Refresh SMARD snapshot
+
+# Scheduled ingestion, deliberately as a cron workflow rather than an orchestrator.
+# At this scale Airflow would mean a scheduler, a metadata database, and infrastructure
+# to babysit, for one weekly task with no fan-out. This runs, and its failures are loud.
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
+  workflow_dispatch:
+    inputs:
+      weeks:
+        description: "Number of weekly SMARD chunks to fetch"
+        default: "52"
+      commit:
+        description: "Commit the refreshed snapshot and reports"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # The gate runs inside download(); a hard failure raises DataValidationError and
+      # fails the job here, before anything is committed.
+      - name: Ingest and validate
+        run: PYTHONPATH=src python scripts/ingest_smard_api.py --weeks ${{ inputs.weeks || '52' }}
+
+      - name: Regenerate reports
+        run: |
+          PYTHONPATH=src python scripts/build_warehouse.py
+          PYTHONPATH=src python scripts/generate_eda.py
+          PYTHONPATH=src python scripts/benchmark.py
+          PYTHONPATH=src python scripts/benchmark_classification.py
+
+      - name: Test against the refreshed snapshot
+        run: |
+          ruff check .
+          pytest -q
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: refreshed-reports
+          path: |
+            reports/
+            data/clean/metadata.json
+          retention-days: 14
+
+      - name: Commit refreshed snapshot
+        if: ${{ inputs.commit != false }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/clean/demand_hourly.csv data/clean/metadata.json reports/ README.md
+          if git diff --staged --quiet; then
+            echo "Nothing changed."
+          else
+            git commit -m "Refresh SMARD snapshot and regenerate reports"
+            git push
+          fi

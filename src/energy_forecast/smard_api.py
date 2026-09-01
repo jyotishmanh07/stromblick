@@ -21,6 +21,7 @@ from .data import (
     canonicalize_demand,
     smard_api_chunk_url,
 )
+from .quality import validate_demand
 
 
 class SMARDAPIClient:
@@ -86,10 +87,13 @@ class SMARDAPIClient:
         raw_dir.mkdir(parents=True, exist_ok=True)
         clean_dir.mkdir(parents=True, exist_ok=True)
         data, urls = self.fetch_latest(weeks)
+        # Raw payloads are written before validation: if the gate rejects the batch, the
+        # evidence needed to diagnose it must still be on disk.
         for position, (url, payload) in enumerate(self.raw_payloads.items()):
             (raw_dir / f"smard_{position:03d}.json").write_text(
                 json.dumps({"source_url": url, "payload": payload}, indent=2), encoding="utf-8"
             )
+        report = validate_demand(data).raise_for_errors()
         data.to_csv(clean_dir / "demand_hourly.csv", index=False)
         metadata = {
             "source": "Bundesnetzagentur | SMARD.de",
@@ -102,6 +106,7 @@ class SMARDAPIClient:
             "rows": len(data),
             "first_timestamp": data.timestamp.min().isoformat(),
             "last_timestamp": data.timestamp.max().isoformat(),
+            "quality": report.to_dict(),
         }
         (clean_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         return data
