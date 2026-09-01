@@ -78,10 +78,18 @@ class SARIMAXBaseline:
 class HistGradientBoostingForecast:
     name = "hist_gradient_boosting"
 
-    def __init__(self, random_state: int = 42) -> None:
+    # Shipped configuration. scripts/tune.py searches around these and only adopts a
+    # replacement when the outer backtest gain clears a paired-bootstrap CI; see the
+    # "Model configuration" section of reports/benchmark.md for the standing verdict.
+    DEFAULT_PARAMS = {
+        "max_iter": 250, "learning_rate": 0.06, "max_leaf_nodes": 31, "l2_regularization": 1.0,
+    }
+
+    def __init__(self, random_state: int = 42, **params) -> None:
+        self.params = {**self.DEFAULT_PARAMS, **params}
+        self.random_state = random_state
         self.regressor = HistGradientBoostingRegressor(
-            max_iter=250, learning_rate=0.06, max_leaf_nodes=31,
-            l2_regularization=1.0, random_state=random_state,
+            random_state=random_state, **self.params
         ) if HistGradientBoostingRegressor is not None else None
 
     def fit(self, frame: pd.DataFrame) -> "HistGradientBoostingForecast":
