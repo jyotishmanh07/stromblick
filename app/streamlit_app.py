@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from energy_forecast.evaluation import error_slices, metrics
+from energy_forecast.events import HighDemandClassifier, daily_feature_frame
 from energy_forecast.models import HistGradientBoostingForecast, SeasonalNaive
 from energy_forecast.service import ForecastService
 from energy_forecast.theme import (
@@ -35,14 +36,19 @@ st.caption("Germany electricity demand forecasting and anomaly detection")
 # --------------------------------------------------------------------------------------
 # Cached computation
 # --------------------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Loading data and fitting the forecast model...")
+@st.cache_resource(ttl=3600, show_spinner="Fetching the latest SMARD data and fitting the model...")
 def get_service() -> ForecastService:
-    return ForecastService()
+    # TTL, not permanence: the service holds the fetched history, so an expiry is what
+    # lets a new SMARD publication reach the page at all.
+    return ForecastService(live=True)
 
 
 @st.cache_data(show_spinner="Forecasting the next 24 hours...")
 def forecast_frame(_service: ForecastService, cache_key: str) -> pd.DataFrame:
-    result = _service.forecast(_service.history.timestamp.max(), 24)
+    # Forecast from the last *published* hour. SMARD indexes hours before publishing
+    # them, so timestamp.max() can sit past the end of the observed series.
+    origin = _service.last_observed or _service.history.timestamp.max()
+    result = _service.forecast(origin, 24)
     frame = pd.DataFrame(result["forecast"])
     frame["timestamp"] = pd.to_datetime(frame.timestamp, utc=True)
     return frame
@@ -82,22 +88,69 @@ def load_benchmark():
     return summary, per_origin
 
 
+@st.cache_data
+def load_classification():
+    """Daily event-classification artifacts from scripts/benchmark_classification.py."""
+    summary_path = REPORTS / "classification_summary.json"
+    if not summary_path.exists():
+        return None
+    return json.loads(summary_path.read_text())
+
+
+@st.cache_data(show_spinner="Scoring tomorrow's event risk...")
+def event_risk(history: pd.DataFrame, cache_key: str) -> dict[str, object] | None:
+    """Fit the daily classifiers on all history and score the most recent labelled day."""
+    daily = daily_feature_frame(history)
+    if len(daily) < 60:
+        return None
+    train, latest = daily.iloc[:-1], daily.iloc[[-1]]
+    if train.label.nunique() < 2:
+        return None
+    return {
+        "date": latest.date.iloc[0],
+        "probability": float(HighDemandClassifier().fit(train).predict_proba(latest)[0]),
+        "baseline_rate": float(train.label.mean()),
+        "peak_mw": float(latest.peak_mw.iloc[0]),
+        "threshold_mw": float(latest.threshold_mw.iloc[0]),
+        "labelled_days": int(len(daily)),
+    }
+
+
 # --------------------------------------------------------------------------------------
 # Header
 # --------------------------------------------------------------------------------------
 service = get_service()
 history = service.history
-cache_key = f"{service.data_source}:{len(history)}:{history.timestamp.max()}"
+# The non-null count matters: SMARD backfills previously unpublished hours without
+# changing the row count or the range, and that must still invalidate downstream caches.
+cache_key = (
+    f"{service.data_source}:{len(history)}:"
+    f"{int(history.demand_mw.notna().sum())}:{history.timestamp.max()}"
+)
 forecast = forecast_frame(service, cache_key)
 benchmark = load_benchmark()
 
+latest = service.last_observed
+age_hours = (
+    (pd.Timestamp.now(tz="UTC") - latest).total_seconds() / 3600 if latest is not None else None
+)
+
 col1, col2, col3 = st.columns(3)
 col1.metric("Latest observed demand", f"{history.demand_mw.dropna().iloc[-1]:,.0f} MW")
-col2.metric("Forecast horizon", "24 hours")
+col2.metric(
+    "Data freshness",
+    "unknown" if age_hours is None else f"{age_hours:,.0f}h ago",
+    help="Hours since the most recent published SMARD observation. Actual grid load is "
+    "published well after the fact — a lag from several hours up to about a day is normal, "
+    "so this figure is rarely close to zero.",
+)
 col3.metric("Data source", service.data_source)
 
-forecast_tab, quality_tab, anomaly_tab, about_tab = st.tabs(
-    ["Forecast", "Model quality", "Anomalies", "Data & methods"]
+if service.live_warning:
+    st.warning(service.live_warning)
+
+forecast_tab, quality_tab, anomaly_tab, event_tab, about_tab = st.tabs(
+    ["Forecast", "Model quality", "Anomalies", "Event risk", "Data & methods"]
 )
 
 
@@ -195,6 +248,20 @@ with quality_tab:
             f"land inside the {coverage['nominal']:.0f}% nominal band "
             f"(mean width {coverage['mean_band_mw']:,.0f} MW)."
         )
+
+        tests = summary.get("significance")
+        if tests:
+            closest = max(tests["comparisons"].values(), key=lambda s: s["mean_diff"])
+            cov_test = tests["coverage"]
+            st.markdown(
+                f"Paired bootstrap over {closest['n']} origins puts that advantage at "
+                f"**[{-closest['ci_upper']:,.0f}, {-closest['ci_lower']:,.0f}] MW** against the "
+                f"closest rival (Wilcoxon p = {closest['wilcoxon_p']:.1e}) — the gap is not "
+                "sampling noise. Mean per-origin interval coverage is "
+                f"{100 * cov_test['mean_coverage']:.1f}% "
+                f"(95% CI [{100 * cov_test['ci_lower']:.1f}%, {100 * cov_test['ci_upper']:.1f}%]) "
+                f"against the {100 * cov_test['nominal']:.0f}% target."
+            )
 
         origin_fig = go.Figure()
         for name, group in per_origin.groupby("model"):
@@ -335,26 +402,129 @@ with anomaly_tab:
 
 
 # --------------------------------------------------------------------------------------
+# Event risk — the classification track
+# --------------------------------------------------------------------------------------
+with event_tab:
+    st.subheader("Is tomorrow a high-demand day?")
+    st.markdown(
+        "A second problem type on the same data. Instead of *how much* demand each hour, this "
+        "asks whether the coming day lands in the **top 30% of the trailing month's peaks** — "
+        "the shape a reserve or staffing decision takes. The threshold is computed from earlier "
+        "days only and shifted, so the rule that judges a day is fixed before the day is seen."
+    )
+    risk = event_risk(history, cache_key)
+    if risk is None:
+        st.info("Not enough labelled history to score event risk.")
+    else:
+        left, mid, right = st.columns(3)
+        left.metric("Probability (most recent day)", f"{risk['probability']:.0%}")
+        mid.metric("Recent positive rate", f"{risk['baseline_rate']:.0%}")
+        right.metric("Threshold to clear", f"{risk['threshold_mw']:,.0f} MW")
+        st.caption(
+            f"Scored for {risk['date']} against {risk['labelled_days']:,} labelled days. The "
+            "probability is only meaningful next to the base rate beside it — a 30% forecast is "
+            "high when the base rate is 12% and unremarkable when it is 30%."
+        )
+
+    classification = load_classification()
+    if classification is None:
+        st.info(
+            "Run `PYTHONPATH=src python scripts/benchmark_classification.py` for the "
+            "chronological backtest of both event targets."
+        )
+    else:
+        st.divider()
+        st.subheader("Chronological backtest")
+        for key, block in classification.items():
+            st.markdown(f"**{block['label']}** — {block['scored_days']:,} days scored")
+            table = pd.DataFrame(
+                [
+                    {
+                        "Model": name,
+                        "PR-AUC": f"{m['pr_auc']:.3f}",
+                        "Lift over base rate": f"{m['pr_auc_lift']:.2f}×",
+                        "ROC-AUC": f"{m['roc_auc']:.3f}",
+                        "Brier": f"{m['brier']:.4f}",
+                    }
+                    for name, m in block["models"].items()
+                ]
+            )
+            st.dataframe(table, hide_index=True, width="stretch")
+            for figure in (REPORTS / "figures" / f"classification_pr_{key}.png",):
+                if figure.exists():
+                    st.image(str(figure), width="stretch")
+        st.caption(
+            "PR-AUC is read against the base rate, not against 0.5 — the lift column is the "
+            "honest version. On the anomaly target the calendar-only baseline nearly matches "
+            "the gradient-boosted model, which says those days are mostly a calendar "
+            "phenomenon (holidays and DST) rather than a demand-dynamics one."
+        )
+
+
+# --------------------------------------------------------------------------------------
 # Data & methods tab
 # --------------------------------------------------------------------------------------
 with about_tab:
     st.subheader("Data snapshot")
     metadata_path = Path("data/clean/metadata.json")
-    if metadata_path.exists():
+    # Live provenance when the fetch succeeded, otherwise the committed snapshot's —
+    # one render path, so the panel can never describe data the app isn't using.
+    metadata = service.provenance
+    if metadata is None and metadata_path.exists():
         metadata = json.loads(metadata_path.read_text())
+    if metadata is not None:
+        origin = (
+            f"Refreshed live from the SMARD API at `{metadata['collected_at']}` "
+            f"({metadata.get('weeks_fetched', '?')} weekly chunks merged onto the committed "
+            "snapshot)."
+            if service.is_live else
+            f"Committed snapshot, collected `{metadata['collected_at']}` from "
+            f"{len(metadata['chunk_urls'])} weekly chunks."
+        )
         st.markdown(
             f"**{metadata['source']}** (CC BY 4.0), module {metadata['module_id']} — Germany "
-            f"actual total grid load. Snapshot of **{metadata['rows']:,} hourly rows** from "
-            f"`{metadata['first_timestamp']}` to `{metadata['last_timestamp']}`, collected "
-            f"`{metadata['collected_at']}` from {len(metadata['chunk_urls'])} weekly chunks. "
-            "SMARD may revise historical values; published results should cite this snapshot."
+            f"actual total grid load. **{metadata['rows']:,} hourly rows** from "
+            f"`{metadata['first_timestamp']}` to `{metadata['last_timestamp']}`. {origin} "
+            "SMARD may revise historical values; published results should cite the snapshot "
+            "recorded in `data/clean/metadata.json`, not the live feed."
+        )
+        st.caption(
+            "SMARD indexes each hour before publishing its value, so the most recent hours "
+            "usually carry no reading yet. The forecast therefore starts from the last "
+            "*published* hour, which typically trails wall-clock time by several hours and "
+            "sometimes by most of a day. Those unpublished hours appear as gaps in the "
+            "observed line rather than being imputed."
+        )
+        quality = metadata.get("quality")
+        if quality:
+            failed = [c for c in quality["checks"] if not c["passed"]]
+            if not failed:
+                st.success(
+                    f"Data-quality gate passed — all {len(quality['checks'])} checks clean "
+                    "(schema, uniqueness, plausible range, continuity, unpublished hours). "
+                    + (
+                        "Live data is re-validated on every refresh; it is only adopted if the "
+                        "gate passes." if service.is_live
+                        else "Checked at ingest time."
+                    )
+                )
+            else:
+                st.warning(
+                    "Data-quality gate flagged: "
+                    + "; ".join(f"**{c['name']}** — {c['detail']}" for c in failed)
+                )
+    elif service.data_source.startswith("deterministic"):
+        st.markdown(
+            "This view uses deterministic synthetic demand because "
+            "`data/clean/demand_hourly.csv` is absent or unreadable. Run "
+            "`PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52` to collect the "
+            "official SMARD snapshot."
         )
     else:
         st.markdown(
-            "This view uses deterministic synthetic demand because "
-            "`data/clean/demand_hourly.csv` is absent. Run "
-            "`PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52` to collect the "
-            "official SMARD snapshot."
+            "Running on the committed snapshot, but `data/clean/metadata.json` is missing, so "
+            "no provenance can be shown. Re-run "
+            "`PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52` to restore it."
         )
 
     st.subheader("Method")
@@ -370,7 +540,13 @@ with about_tab:
         "if it cannot beat \"same hour yesterday\", it is not earning its complexity.\n"
         "- **Empirical intervals and anomalies.** Both come from validation-residual "
         "magnitudes only — not calibrated probabilistic forecasts, and anomalies are prompts "
-        "to investigate weather, calendar, or grid context rather than confirmed events."
+        "to investigate weather, calendar, or grid context rather than confirmed events.\n"
+        "- **Tested claims.** The champion's margin over each rival carries a paired bootstrap "
+        "CI and a Wilcoxon/Diebold-Mariano p-value, computed per origin because hours inside "
+        "one 24-hour window are correlated.\n"
+        "- **SQL reporting layer.** EDA aggregations and error slices run against a DuckDB "
+        "warehouse (`fact_demand`, `dim_calendar`, `fact_forecast`) built from the same "
+        "snapshot; each query is tested against its pandas equivalent."
     )
     if benchmark is not None:
         st.caption(
