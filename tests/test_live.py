@@ -1,4 +1,5 @@
 import json
+import time
 
 import numpy as np
 import pandas as pd
@@ -150,6 +151,24 @@ def test_stale_snapshot_beyond_the_bridge_limit_is_reported_not_patched(monkeypa
     )
     assert not result.is_live
     assert "too far behind" in result.warning
+
+
+def test_a_hanging_upstream_cannot_stall_the_page_past_the_deadline(monkeypatch):
+    committed = committed_frame()
+
+    def hang(url, **kwargs):
+        time.sleep(30)  # longer than any deadline the app would use
+
+    monkeypatch.setattr("energy_forecast.smard_api.httpx.get", hang)
+    start = time.time()
+    result = fetch_live_history(
+        committed, now=committed.timestamp.max() + pd.Timedelta(hours=1), deadline_seconds=1.0
+    )
+    elapsed = time.time() - start
+    assert elapsed < 5, f"deadline not enforced, took {elapsed:.1f}s"
+    assert not result.is_live
+    assert "exceeded" in result.warning
+    assert result.history.equals(committed)
 
 
 def test_last_observed_ignores_indexed_but_unpublished_hours():

@@ -24,6 +24,7 @@ human-readable warning rather than raising.
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -73,13 +74,44 @@ def bridge_weeks(
 
 
 def fetch_live_history(
-    committed: pd.DataFrame, now: pd.Timestamp | None = None, timeout_seconds: float = 10.0,
-    max_weeks: int = 8,
+    committed: pd.DataFrame, now: pd.Timestamp | None = None, timeout_seconds: float = 5.0,
+    max_weeks: int = 8, deadline_seconds: float = 12.0,
 ) -> LiveResult:
-    """Merge the latest SMARD chunks onto the committed history.
+    """Merge the latest SMARD chunks onto the committed history, within a hard deadline.
 
     Never raises: any failure returns the committed frame with `is_live=False`.
+
+    `timeout_seconds` bounds a single HTTP request; `deadline_seconds` bounds the whole
+    attempt. Both are needed — the client fetches sequentially, so per-request timeouts
+    alone would let a slow upstream stall a page load for their sum. Past the deadline
+    the committed snapshot is served instead; a visitor waiting on a spinner is worse
+    than a visitor seeing slightly older data.
     """
+    box: dict[str, LiveResult] = {}
+
+    def run() -> None:
+        box["result"] = _fetch_live_history(committed, now, timeout_seconds, max_weeks)
+
+    # A daemon thread, not ThreadPoolExecutor: the executor joins its workers both on
+    # context exit and at interpreter shutdown, so a hung request would still block --
+    # which is the whole thing this deadline exists to prevent.
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=deadline_seconds)
+    if worker.is_alive() or "result" not in box:
+        return LiveResult(
+            committed, False, COMMITTED_LABEL,
+            warning=(
+                f"Live SMARD fetch exceeded {deadline_seconds:.0f}s and was abandoned. "
+                "Showing the committed snapshot."
+            ),
+        )
+    return box["result"]
+
+
+def _fetch_live_history(
+    committed: pd.DataFrame, now: pd.Timestamp | None, timeout_seconds: float, max_weeks: int
+) -> LiveResult:
     fallback = LiveResult(committed, False, COMMITTED_LABEL)
     if committed.empty:
         return LiveResult(committed, False, COMMITTED_LABEL, warning="No committed history.")
