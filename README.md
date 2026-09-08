@@ -30,6 +30,8 @@ The repository compares exactly three model levels:
 
 Every lag and rolling feature is shifted first, so current or future demand cannot leak into a training row. DST-aware timestamps are normalized to UTC; naive source timestamps are interpreted as Europe/Berlin.
 
+**Verification** ([verification.py](src/energy_forecast/verification.py)) answers the question a backtest table does not: was the forecast we showed yesterday any good? It has two halves, and the distinction between them is the point. The *replay* refits a fresh model at each of the last seven daily origins on rows dated at or before that origin, so it shows what the model **would have** said — leakage-safe, but computed after the fact. The *log* is a CSV of forecasts written by a daily workflow at the moment they were issued and committed to git, so it shows what the model **did** say, before the outcome existed. Only the second is evidence a replay cannot manufacture; both key off the last *published* hour rather than wall-clock time.
+
 ## Results
 
 Full rolling-origin backtest of all three levels over the collected snapshot — every model refit at every origin, no random split — is in **[reports/benchmark.md](reports/benchmark.md)** (regenerate with `PYTHONPATH=src python scripts/benchmark.py`).
@@ -77,7 +79,7 @@ PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52
 
 The client reads the weekly index at `https://www.smard.de/app/chart_data/410/DE/index_hour.json`, then pulls each weekly chunk (`.../410_DE_hour_<epoch_ms>.json`). Payload values are average-interval demand in MW at epoch-millisecond timestamps; they are converted to UTC hourly observations with columns `timestamp` and `demand_mw`. It defaults to the latest 52 weekly chunks (`--weeks` to change).
 
-Every raw index/chunk response is written to `data/raw/`, canonical hourly demand to `data/clean/demand_hourly.csv`, and provenance (source URLs, collection time, row count, snapshot bounds) to `data/clean/metadata.json`. Missing hourly timestamps are reported, never imputed. `data/` is not tracked in git except for `metadata.json`; re-run the ingest command to rebuild the dataset.
+Every raw index/chunk response is written to `data/raw/`, canonical hourly demand to `data/clean/demand_hourly.csv`, and provenance (source URLs, collection time, row count, snapshot bounds) to `data/clean/metadata.json`. Missing hourly timestamps are reported, never imputed. Three files under `data/` are tracked in git — the demand snapshot, its `metadata.json`, and `data/forecasts/forecast_log.csv` — because the deployed dashboard serves real data and the forecast log is only worth anything if it is durable. The raw payloads are not; re-run the ingest command to rebuild them.
 
 Attribute the data to **Bundesnetzagentur | SMARD.de** under **CC BY 4.0**. SMARD may revise historical grid-load values, so a published result should cite the collected snapshot recorded in `metadata.json`.
 
@@ -103,7 +105,7 @@ Ingestion runs an explicit gate before anything is written ([quality.py](src/ene
 
 Checks are graded. **Errors** (schema, duplicate timestamps, non-UTC or unsorted stamps, values outside 20–100 GW, optional staleness) abort the ingest and raise `DataValidationError`. **Warnings** (gap fraction, unpublished-hour fraction) are recorded but never fatal, because gaps are a normal property of a SMARD snapshot — this project reports them rather than imputing them. The full per-check report is written into `data/clean/metadata.json` and surfaced in the dashboard's *Data & methods* tab.
 
-A weekly [GitHub Actions workflow](.github/workflows/refresh-data.yml) re-ingests, validates, regenerates every report, runs the test suite, and commits the refreshed snapshot. That is deliberately a cron job rather than Airflow: at one weekly task with no fan-out, an orchestrator would add a scheduler, a metadata database, and infrastructure to babysit without changing what actually runs. At production scale this role belongs to Great Expectations or dbt tests behind Airflow or Dagster — noted as the scale-up path rather than imported for the label.
+A weekly [GitHub Actions workflow](.github/workflows/refresh-data.yml) re-ingests, validates, regenerates every report, runs the test suite, and commits the refreshed snapshot. A second, daily [workflow](.github/workflows/log-forecast.yml) issues one 24-hour forecast and appends it to `data/forecasts/forecast_log.csv`; it fails rather than logging anything if the live fetch did not succeed, because a forecast issued from a stale origin is not a record of what was published. Both are deliberately cron jobs rather than Airflow: at one weekly task with no fan-out, an orchestrator would add a scheduler, a metadata database, and infrastructure to babysit without changing what actually runs. At production scale this role belongs to Great Expectations or dbt tests behind Airflow or Dagster — noted as the scale-up path rather than imported for the label.
 
 ### SQL layer
 
@@ -125,9 +127,11 @@ Ingestion is deliberately *not* routed through the warehouse: `canonicalize_dema
 
 ### Reading the dashboard
 
-A header metrics row — latest observed demand, the fixed 24-hour horizon, and the loaded data source ("SMARD clean export" for the real snapshot, the deterministic demo series otherwise) — sits above five tabs.
+A header metrics row — latest observed demand, data freshness (hours since the most recent published SMARD observation), and the loaded data source ("SMARD clean export" for the real snapshot, the deterministic demo series otherwise) — sits above six tabs.
 
 **Forecast** — the last three days of observed demand (dark line) then the 24-hour forecast (blue), with a dotted marker at the forecast start. The shaded band is the forecast ± the 95th percentile of absolute residuals the model made on a held-out validation week, so its width reflects how wrong the model has recently been, not a probabilistic guarantee. Gaps in the observed line are hours SMARD has indexed but not yet published.
+
+**Track record** — the last seven daily forecasts against what actually happened, with per-day MAE and interval coverage. The upper chart is the *replay*: each day refit on data dated at or before that day's origin, so no future value reaches it, but computed now. The lower chart is the *log*: the forecasts the daily workflow committed to git at the moment it issued them, joined to actuals as SMARD publishes them. The replay is available immediately and the log accrues one day at a time; the tab says which is which rather than blurring them, because only the log rules out hindsight.
 
 **Model quality** — the full rolling-origin backtest from `reports/benchmark.md`: the three-model headline table, per-origin MAE for each model, prediction-interval coverage, permutation importance, and the champion's error slices. Below a divider, the fast trailing-7-day holdout comparison (seasonal-naive vs gradient boosting, with hour/weekday error slices) that runs live in the app. Both carry the same message: the main model has to beat "same hour yesterday" to justify its complexity.
 

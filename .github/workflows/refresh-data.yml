@@ -19,6 +19,12 @@ on:
 permissions:
   contents: write
 
+# Serialised against log-forecast.yml: both workflows push to main, and a concurrent
+# push would lose one of them to a non-fast-forward rejection.
+concurrency:
+  group: commit-to-main
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest

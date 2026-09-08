@@ -32,6 +32,12 @@ from energy_forecast.theme import (
     OBSERVED,
     plotly_layout,
 )
+from energy_forecast.verification import (
+    DEFAULT_LOG_PATH,
+    daily_scores,
+    join_log_to_actuals,
+    load_forecast_log,
+)
 
 GBM = MODEL_COLORS["HistGradientBoosting"]
 BERLIN = "Europe/Berlin"
@@ -54,6 +60,73 @@ def unpublished_spans(frame: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timest
             (run.iloc[0] - pd.Timedelta(minutes=30), run.iloc[-1] + pd.Timedelta(minutes=30))
         )
     return spans
+
+
+def record_figure(
+    plot: pd.DataFrame, color: str, name: str, dash: str | None = None,
+    shade_until: pd.Timestamp | None = None,
+) -> go.Figure:
+    """Band, actuals and forecast over a local-time axis — the Track record chart grammar.
+
+    `plot` needs `timestamp` and `local` columns plus demand_mw/prediction/lower_bound/
+    upper_bound. Trace order matters: the two invisible bound traces come first so
+    `fill="tonexty"` paints the band *behind* the lines rather than over them.
+
+    `shade_until` bounds the missing-data shading at the last published hour. Without it a
+    forecast for hours that simply have not happened yet reads as a reporting gap, and the
+    published-log chart — whose hours are all in the future when it is first written —
+    would shade solid grey. Absent demand after that instant is the future, not a hole.
+    """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=plot.local, y=plot.upper_bound,
+            line=dict(width=0), hoverinfo="skip", showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot.local, y=plot.lower_bound,
+            name="Prediction interval", fill="tonexty", fillcolor=INTERVAL_FILL,
+            line=dict(width=0), hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot.local, y=plot.demand_mw, name="Observed",
+            line=dict(color=OBSERVED, width=2),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot.local, y=plot.prediction, name=name,
+            line=dict(color=color, width=2.5, dash=dash),
+        )
+    )
+    # Same reason as the Forecast tab: an unpublished run must not read as demand collapsing.
+    observable = plot if shade_until is None else plot[plot.timestamp <= shade_until]
+    for start, end in unpublished_spans(observable):
+        fig.add_vrect(
+            x0=start.timestamp() * 1000, x1=end.timestamp() * 1000,
+            fillcolor=MUTED, opacity=0.13, line_width=0, layer="below",
+        )
+    fig.update_layout(
+        **plotly_layout(yaxis_title="Demand (MW)", xaxis_title="Time (Europe/Berlin)")
+    )
+    return fig
+
+
+def score_table(scores: pd.DataFrame) -> pd.DataFrame:
+    """Render `daily_scores` for display. A window with no published hour shows "—", not nan."""
+    return pd.DataFrame(
+        {
+            "Origin (Berlin)": scores.origin.dt.tz_convert(BERLIN).dt.strftime("%a %d %b %H:%M"),
+            "Hours scored": scores.hours_scored,
+            "MAE (MW)": [f"{v:,.0f}" if pd.notna(v) else "—" for v in scores.mae],
+            "Coverage": [f"{v:.0%}" if pd.notna(v) else "—" for v in scores.coverage],
+        }
+    )
+
 
 WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 REPORTS = Path("reports")
@@ -82,6 +155,31 @@ def forecast_frame(_service: ForecastService, cache_key: str) -> pd.DataFrame:
     frame = pd.DataFrame(result["forecast"])
     frame["timestamp"] = pd.to_datetime(frame.timestamp, utc=True)
     return frame
+
+
+@st.cache_data(show_spinner="Replaying the last seven days...")
+def hindcast_frame(_service: ForecastService, cache_key: str, days: int = 7) -> pd.DataFrame:
+    # days + 1 model fits (the extra one calibrates the residual band), so seconds locally
+    # and a good deal longer on Streamlit Cloud's shared CPU — worth caching hard.
+    return _service.hindcast(days=days)
+
+
+def log_stamp(path: Path) -> str:
+    """Cheap identity for the forecast log file. Deliberately *not* cached — it is the
+    thing that decides whether a cache entry is stale, so it has to be read every run."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return "missing"
+    return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+
+@st.cache_data(show_spinner="Scoring the published forecast log...")
+def published_forecasts(_service: ForecastService, cache_key: str, log_key: str) -> pd.DataFrame:
+    # `log_key` is never read here: it is in the signature purely so that a commit from the
+    # forecast-logging workflow invalidates this join. `cache_key` alone would not — the log
+    # gains a new origin without the demand snapshot changing at all.
+    return join_log_to_actuals(load_forecast_log(DEFAULT_LOG_PATH), _service.history)
 
 
 @st.cache_data(show_spinner="Comparing models on the trailing week...")
@@ -179,8 +277,8 @@ col3.metric("Data source", service.data_source)
 if service.live_warning:
     st.warning(service.live_warning)
 
-forecast_tab, quality_tab, anomaly_tab, event_tab, about_tab = st.tabs(
-    ["Forecast", "Model quality", "Anomalies", "Event risk", "Data & methods"]
+forecast_tab, record_tab, quality_tab, anomaly_tab, event_tab, about_tab = st.tabs(
+    ["Forecast", "Track record", "Model quality", "Anomalies", "Event risk", "Data & methods"]
 )
 
 
@@ -260,6 +358,154 @@ with forecast_tab:
         "residuals the model made on a held-out validation week — its width reflects how wrong "
         "the model has recently been, not a probabilistic guarantee." + gap_note
     )
+
+
+# --------------------------------------------------------------------------------------
+# Track record tab
+# --------------------------------------------------------------------------------------
+with record_tab:
+    st.subheader("Last seven days, replayed")
+    replay = hindcast_frame(service, cache_key)
+    if replay.empty:
+        st.info(
+            "Replaying a week needs roughly 30 days of hourly history: seven daily origins, a "
+            "validation week before the first of them, and enough rows left over to fit a model. "
+            "This snapshot is shorter than that."
+        )
+    else:
+        replay_plot = replay.sort_values("timestamp").reset_index(drop=True).copy()
+        replay_plot["local"] = replay_plot.timestamp.dt.tz_convert(BERLIN)
+        replay_fig = record_figure(
+            replay_plot, EXPECTED, "Hindcast", dash="dash", shade_until=service.last_observed
+        )
+        # The seven windows are contiguous, so the lines are continuous; the dotted marks are
+        # where one forecast ended and the next model was refit. epoch-ms is the form plotly
+        # reliably accepts for a vline on a datetime axis.
+        for origin in sorted(replay.origin.unique()):
+            replay_fig.add_vline(
+                x=pd.Timestamp(origin).tz_convert(BERLIN).timestamp() * 1000,
+                line=dict(color=MUTED, width=1, dash="dot"),
+            )
+        st.plotly_chart(replay_fig, width="stretch")
+
+        replay_scores = daily_scores(replay)
+        st.dataframe(score_table(replay_scores), hide_index=True, width="stretch")
+
+        scored_hours = int(replay_scores.hours_scored.sum())
+        if scored_hours == 0:
+            st.markdown(
+                "**No hour in the replayed week has been published yet**, so none of these "
+                "windows can be scored."
+            )
+        else:
+            mean_mae = float(replay_scores.mae.mean())
+            bench_mae = None
+            if benchmark is not None:
+                bench_mae = (
+                    benchmark[0].get("models", {}).get("HistGradientBoosting", {}).get("mae_mean")
+                )
+            line = (
+                f"**Mean MAE across the seven days: {mean_mae:,.0f} MW** "
+                f"({scored_hours} of {len(replay)} hours scored)."
+            )
+            if bench_mae:
+                direction = "better" if mean_mae < bench_mae else "worse"
+                line += (
+                    f" This week ran {direction} than the year-long backtest average of "
+                    f"{bench_mae:,.0f} MW."
+                )
+            st.markdown(line)
+
+        st.caption(
+            "Seven separate 24-hour forecasts, one per day. Each is refit on data dated at or "
+            "before its own origin and run forward through the same code path as the live "
+            "forecast, so no future value can reach it — but it is computed after the fact, with "
+            "today's data, so it shows what the model *would have* said, not what it did say. "
+            "The band is ± the 95th percentile of absolute residuals over the week *before* the "
+            "replayed window: an empirical error magnitude, not a calibrated probability. "
+            "Shaded hours are indexed by SMARD but not yet published; they are excluded from the "
+            "scores rather than imputed, which is why some windows show fewer than 24 hours."
+        )
+
+    st.divider()
+    st.subheader("Published forecasts vs what happened")
+    log_key = log_stamp(DEFAULT_LOG_PATH)
+    published = published_forecasts(service, cache_key, log_key)
+    published_scores = daily_scores(published)
+    scored_origins = (
+        0 if published_scores.empty else int((published_scores.hours_scored > 0).sum())
+    )
+    if published.empty:
+        st.info(
+            "Nothing logged yet. A daily GitHub Action issues one 24-hour forecast from the last "
+            "published hour and commits it to `data/forecasts/forecast_log.csv`. The first "
+            "comparison appears once those forecast hours have themselves been published by "
+            "SMARD, which lags by several hours up to about a day."
+        )
+    else:
+        # Consecutive logged origins are not exactly 24h apart: SMARD's publication lag moves,
+        # so the origin the workflow forecasts from moves with it. Two consequences.
+        # (1) Windows overlap. On an overlapping hour, plot the most recent origin's value —
+        #     the freshest forecast for that hour — but score every logged origin in the table
+        #     below, because each one was a separate published claim.
+        # (2) When the lag *grew*, no origin covers some hours at all. Reindexing onto a
+        #     continuous hourly grid leaves those as NaN so the forecast line breaks there.
+        #     Do not bridge it: a hole in the log is not a forecast.
+        latest_per_hour = (
+            published.sort_values(["timestamp", "origin"])
+            .drop_duplicates("timestamp", keep="last")
+        )
+        grid = pd.DataFrame(
+            {
+                "timestamp": pd.date_range(
+                    published.timestamp.min(), published.timestamp.max(), freq="1h", tz="UTC"
+                )
+            }
+        )
+        published_plot = grid.merge(
+            latest_per_hour[["timestamp", "prediction", "lower_bound", "upper_bound"]],
+            on="timestamp", how="left",
+        ).merge(
+            # Actuals off the full history, not off the join: a grid hour with no logged
+            # forecast still has an observation, and the observed line should keep going.
+            history[["timestamp", "demand_mw"]], on="timestamp", how="left",
+        )
+        published_plot["local"] = published_plot.timestamp.dt.tz_convert(BERLIN)
+        st.plotly_chart(
+            record_figure(
+                published_plot, FORECAST, "Published forecast",
+                shade_until=service.last_observed,
+            ),
+            width="stretch",
+        )
+        st.dataframe(score_table(published_scores), hide_index=True, width="stretch")
+
+        if scored_origins == 0:
+            st.caption(
+                f"{len(published_scores)} forecast{'s' if len(published_scores) != 1 else ''} "
+                "logged, none scorable yet — SMARD has not published any of the hours they cover. "
+                "The comparison fills in as those readings arrive."
+            )
+        elif scored_origins < 3:
+            st.caption(
+                f"Only {scored_origins} logged forecast"
+                f"{'s have' if scored_origins != 1 else ' has'} a published hour to score "
+                "against. A day or two is an anecdote, not evidence — read it as a smoke test "
+                "until the log is longer."
+            )
+        else:
+            mean_mae = float(published_scores.mae.mean())
+            st.markdown(
+                f"**Mean MAE across {scored_origins} published forecasts: {mean_mae:,.0f} MW.**"
+            )
+
+        st.caption(
+            "These rows were written before the outcome was known and are never revised — a "
+            "re-issued forecast for the same hour replaces the older one, and nothing else does. "
+            "That is the one thing a replay cannot manufacture. The actuals are SMARD's readings "
+            "as currently published, and SMARD does revise history, so a score here can shift "
+            "slightly after the fact."
+        )
 
 
 # --------------------------------------------------------------------------------------
@@ -362,6 +608,8 @@ with quality_tab:
         )
         st.caption(
             "Metrics on the trailing 7-day holdout — the fast honesty check that runs live. "
+            "This panel is a single 168-hour recursive forecast, whereas the Track record tab "
+            "replays seven separate 24-hour forecasts, the horizon the product actually ships. "
             "Mean absolute error for HistGradientBoosting, sliced by local hour and weekday:"
         )
         slices = error_slices(holdout, gbm_predicted)

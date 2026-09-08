@@ -1,0 +1,65 @@
+name: Log daily forecast
+
+# Appends today's 24-hour forecast to data/forecasts/forecast_log.csv, so the repo
+# carries a committed record of what the model said *before* the outcome was known.
+# A retrospective replay can always be re-run until it flatters the model; a forecast
+# timestamped and committed ahead of its hours is the one piece of evidence it cannot
+# manufacture.
+on:
+  schedule:
+    - cron: "23 6 * * *" # daily 06:23 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the forecast without writing or committing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Serialised against refresh-data.yml: both workflows push to main, and a concurrent
+# push would lose one of them to a non-fast-forward rejection.
+concurrency:
+  group: commit-to-main
+  cancel-in-progress: false
+
+jobs:
+  log:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the commit step rebases before pushing, which cannot work
+          # against the default depth-1 clone.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # No [dev] extra: this job runs no tests and should finish in ~2 minutes.
+      - name: Install
+        run: pip install -e .
+
+      # Exits 1 when the live SMARD fetch fails, rather than logging a forecast
+      # issued from a stale origin.
+      - name: Issue and log the forecast
+        id: log
+        run: >
+          PYTHONPATH=src python scripts/log_forecast.py
+          ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Commit the forecast log
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/forecasts/forecast_log.csv
+          if git diff --staged --quiet; then
+            echo "Nothing changed."
+          else
+            git commit -m "Log the 24h forecast issued from ${{ steps.log.outputs.origin }}"
+            git pull --rebase
+            git push
+          fi

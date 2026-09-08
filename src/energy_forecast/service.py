@@ -11,6 +11,7 @@ from .anomaly import detect_anomalies
 from .data import DataValidationError, load_clean_demand
 from .live import COMMITTED_LABEL, fetch_live_history, last_observed
 from .models import HistGradientBoostingForecast, forecast_with_interval
+from .verification import hindcast
 
 
 def demo_demand(hours: int = 24 * 90) -> pd.DataFrame:
@@ -97,6 +98,10 @@ class ForecastService:
         window_model = HistGradientBoostingForecast().fit(earlier)
         predicted = window_model.predict(pd.DatetimeIndex(window.timestamp))
         return detect_anomalies(window, predicted, residuals, quantile)
+
+    def hindcast(self, days: int = 7) -> pd.DataFrame:
+        """Replay the last `days` daily origins, refitting strictly before each one."""
+        return hindcast(self.history, days=days)
 
     def forecast(self, as_of: pd.Timestamp, horizon_hours: int) -> dict[str, object]:
         output = forecast_with_interval(
