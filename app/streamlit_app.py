@@ -17,6 +17,7 @@ import streamlit as st
 # Harmless elsewhere: a missing src/ is ignored and the installed package is used.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from energy_forecast import drift
 from energy_forecast.evaluation import error_slices, metrics
 from energy_forecast.events import HighDemandClassifier, daily_feature_frame
 from energy_forecast.models import HistGradientBoostingForecast, SeasonalNaive
@@ -30,6 +31,7 @@ from energy_forecast.theme import (
     MODEL_COLORS,
     MUTED,
     OBSERVED,
+    SURFACE,
     plotly_layout,
 )
 from energy_forecast.verification import (
@@ -41,6 +43,9 @@ from energy_forecast.verification import (
 
 GBM = MODEL_COLORS["HistGradientBoosting"]
 BERLIN = "Europe/Berlin"
+# One hue per drift level, from the existing palette: the champion's own blue when it is
+# behaving, the "expected" orange for watch, the reserved status red for a regression.
+DRIFT_COLORS = {"ok": GBM, "watch": EXPECTED, "regressed": ANOMALY, "unknown": MUTED}
 
 
 def unpublished_spans(frame: pd.DataFrame) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -106,8 +111,12 @@ def record_figure(
     # Same reason as the Forecast tab: an unpublished run must not read as demand collapsing.
     observable = plot if shade_until is None else plot[plot.timestamp <= shade_until]
     for start, end in unpublished_spans(observable):
+        # Shape coordinates must be passed in the SAME form as the trace's x values.
+        # A tz-aware trace serialises to "…T15:00:00+02:00" and plotly.js ignores the
+        # offset, reading 15:00; an epoch-ms number is UTC-based and would read 13:00,
+        # putting every shape one or two hours off the data it marks.
         fig.add_vrect(
-            x0=start.timestamp() * 1000, x1=end.timestamp() * 1000,
+            x0=start, x1=end,
             fillcolor=MUTED, opacity=0.13, line_width=0, layer="below",
         )
     fig.update_layout(
@@ -124,6 +133,39 @@ def score_table(scores: pd.DataFrame) -> pd.DataFrame:
             "Hours scored": scores.hours_scored,
             "MAE (MW)": [f"{v:,.0f}" if pd.notna(v) else "—" for v in scores.mae],
             "Coverage": [f"{v:.0%}" if pd.notna(v) else "—" for v in scores.coverage],
+        }
+    )
+
+
+def verdict_badge(level: str) -> str:
+    """A drift level as a coloured pill. The word carries the state; the colour repeats it."""
+    return (
+        f"<span style='background:{DRIFT_COLORS.get(level, MUTED)};color:{SURFACE};"
+        "padding:3px 12px;border-radius:11px;font-weight:600;font-size:0.82rem;"
+        f"letter-spacing:0.06em'>{level.upper()}</span>"
+    )
+
+
+def run_ledger(runs: pd.DataFrame) -> pd.DataFrame:
+    """The last eight recorded benchmark runs, formatted for display."""
+
+    def stamp(column: pd.Series) -> list[str]:
+        local = pd.to_datetime(column, utc=True).dt.tz_convert(BERLIN)
+        return [t.strftime("%d %b %Y %H:%M") if pd.notna(t) else "—" for t in local]
+
+    tail = runs.tail(8)
+    return pd.DataFrame(
+        {
+            "Run date": stamp(tail.run_at),
+            "Snapshot end": stamp(tail.snapshot_end),
+            "Origins": [f"{v:,.0f}" if pd.notna(v) else "—" for v in tail.origins],
+            "Champion MAE": [
+                f"{v:,.0f} MW" if pd.notna(v) else "—" for v in tail.champion_mae_mean
+            ],
+            "Coverage": [
+                f"{v:.1%}" if pd.notna(v) else "—" for v in tail.coverage_mean_per_origin
+            ],
+            "Verdict": [str(v) if isinstance(v, str) else "—" for v in tail.drift_level],
         }
     )
 
@@ -164,8 +206,8 @@ def hindcast_frame(_service: ForecastService, cache_key: str, days: int = 7) -> 
     return _service.hindcast(days=days)
 
 
-def log_stamp(path: Path) -> str:
-    """Cheap identity for the forecast log file. Deliberately *not* cached — it is the
+def file_stamp(path: Path) -> str:
+    """Cheap identity for a committed data file. Deliberately *not* cached — it is the
     thing that decides whether a cache entry is stale, so it has to be read every run."""
     try:
         stat = path.stat()
@@ -180,6 +222,20 @@ def published_forecasts(_service: ForecastService, cache_key: str, log_key: str)
     # forecast-logging workflow invalidates this join. `cache_key` alone would not — the log
     # gains a new origin without the demand snapshot changing at all.
     return join_log_to_actuals(load_forecast_log(DEFAULT_LOG_PATH), _service.history)
+
+
+@st.cache_data(show_spinner="Reading the model-health history...")
+def drift_history(runs_key: str, scores_key: str):
+    """Retained run summaries and per-origin scores, or None when nothing is recorded yet.
+
+    No `_service` argument, unlike `published_forecasts`: these are two plain file reads
+    of artifacts the benchmark commits, and the demand snapshot cannot change them, so the
+    two file stamps are the whole cache key.
+    """
+    scores = drift.load_origin_history(drift.ORIGIN_HISTORY_PATH)
+    if scores.empty:
+        return None
+    return drift.load_run_history(drift.RUN_HISTORY_PATH), scores
 
 
 @st.cache_data(show_spinner="Comparing models on the trailing week...")
@@ -325,18 +381,20 @@ with forecast_tab:
     gaps = unpublished_spans(observed)
     for start, end in gaps:
         fig.add_vrect(
-            x0=start.timestamp() * 1000, x1=end.timestamp() * 1000,
+            x0=start, x1=end,
             fillcolor=MUTED, opacity=0.13, line_width=0, layer="below",
         )
     if gaps:
         mid = gaps[0][0] + (gaps[0][1] - gaps[0][0]) / 2
         fig.add_annotation(
-            x=mid.timestamp() * 1000, yref="paper", y=0.5, text="not yet<br>published",
+            x=mid, yref="paper", y=0.5, text="not yet<br>published",
             showarrow=False, font=dict(size=10, color=MUTED),
         )
-    # epoch-ms is the form plotly reliably accepts for a vline on a datetime axis
+    # Pass the same tz-aware form the traces use. plotly.js ignores the offset in a date
+    # string, so a trace point reads as its Berlin wall-clock time; an epoch-ms number is
+    # UTC-based and would land this marker an hour or two to the left of the data.
     fig.add_vline(
-        x=last_observed_ts.tz_convert(BERLIN).timestamp() * 1000,
+        x=last_observed_ts.tz_convert(BERLIN),
         line=dict(color=MUTED, width=1, dash="dot"),
     )
     fig.update_layout(
@@ -379,11 +437,11 @@ with record_tab:
             replay_plot, EXPECTED, "Hindcast", dash="dash", shade_until=service.last_observed
         )
         # The seven windows are contiguous, so the lines are continuous; the dotted marks are
-        # where one forecast ended and the next model was refit. epoch-ms is the form plotly
-        # reliably accepts for a vline on a datetime axis.
+        # where one forecast ended and the next model was refit. Same tz-aware form as the
+        # traces — see record_figure on why an epoch-ms shape misplaces itself.
         for origin in sorted(replay.origin.unique()):
             replay_fig.add_vline(
-                x=pd.Timestamp(origin).tz_convert(BERLIN).timestamp() * 1000,
+                x=pd.Timestamp(origin).tz_convert(BERLIN),
                 line=dict(color=MUTED, width=1, dash="dot"),
             )
         st.plotly_chart(replay_fig, width="stretch")
@@ -429,7 +487,7 @@ with record_tab:
 
     st.divider()
     st.subheader("Published forecasts vs what happened")
-    log_key = log_stamp(DEFAULT_LOG_PATH)
+    log_key = file_stamp(DEFAULT_LOG_PATH)
     published = published_forecasts(service, cache_key, log_key)
     published_scores = daily_scores(published)
     scored_origins = (
@@ -507,11 +565,222 @@ with record_tab:
             "slightly after the fact."
         )
 
+    st.caption(
+        "For how these numbers have moved run-over-run, see Model health on the Model "
+        "quality tab."
+    )
+
 
 # --------------------------------------------------------------------------------------
 # Model quality tab
 # --------------------------------------------------------------------------------------
 with quality_tab:
+    # Model health first: this tab already owns the artifacts the history is derived from,
+    # and "is it still as good?" is only worth asking above "is it good?".
+    st.subheader("Model health")
+    drift_state = drift_history(
+        file_stamp(drift.RUN_HISTORY_PATH), file_stamp(drift.ORIGIN_HISTORY_PATH)
+    )
+    if drift_state is None:
+        st.info(
+            "No run history yet. `scripts/benchmark.py` appends one row per complete run; the "
+            "weekly refresh writes the first. Seed it now from the artifacts already in "
+            "`reports/` with `PYTHONPATH=src python scripts/benchmark.py --seed-history`."
+        )
+        # Never leave the panel blank: the replayed week is a reading the app can always
+        # take, and `live_verdict` caps it at "watch" because 7 origins is too few to condemn.
+        live = drift.live_verdict(
+            daily_scores(hindcast_frame(service, cache_key)),
+            pd.DataFrame(columns=drift.ORIGIN_COLUMNS),
+        )
+        st.markdown(verdict_badge(live.level), unsafe_allow_html=True)
+        st.markdown(live.headline)
+        st.caption(
+            "Provisional, from the last 7 replayed days and capped at *watch* — a stand-in "
+            "for the weekly verdict until the run history exists."
+        )
+    else:
+        runs, scores = drift_state
+        runs = runs.sort_values(["run_at", "snapshot_end"]).reset_index(drop=True)
+        # Uncached and inline, unlike the file reads above: a percentile over a few thousand
+        # rows is sub-millisecond, and keeping a frozen dataclass out of Streamlit's
+        # return-value pickling avoids a class of hashing surprise.
+        verdict = drift.regression_verdict(scores, runs)
+        coverage = drift.coverage_drift(runs)
+        window = drift.recent_window(scores)
+
+        status = st.columns(3)
+        status[0].markdown(verdict_badge(verdict.level), unsafe_allow_html=True)
+        status[0].markdown(verdict.headline)
+        status[0].caption(verdict.reason)
+
+        window_mae = verdict.window_mae
+        gap = window_mae - verdict.reference_median
+        status[1].metric(
+            f"Trailing {drift.RECENT_ORIGINS}-origin MAE",
+            f"{window_mae:,.0f} MW" if pd.notna(window_mae) else "—",
+            delta=f"{gap:+,.0f} MW vs same season" if pd.notna(gap) else None,
+            # Lower error is better, so a positive delta must not read as good news.
+            delta_color="inverse",
+            help=f"Mean 24-hour MAE over the {verdict.window_origins} most recent scored "
+            "origins, against the median of the season-matched reference days beside it.",
+        )
+
+        coverage_help = (
+            "Mean per-origin coverage of the prediction interval in the latest run, judged "
+            "against the coverage this model has been establishing across earlier runs — not "
+            "against the 95% label, which the band under-covers by design."
+        )
+        if coverage["level"] == "unknown":
+            status[2].metric("Interval coverage", "—", help=coverage_help)
+        else:
+            status[2].metric(
+                "Interval coverage",
+                f"{coverage['mean']:.1%}",
+                delta=f"{-100 * coverage['drop']:+.1f} pp vs baseline",
+                help=coverage_help,
+            )
+        status[2].caption(coverage["headline"])
+
+        if len(window):
+            centre = window.origin.iloc[len(window) // 2]
+            reference = drift.seasonal_reference(
+                scores, centre, exclude_from=window.origin.min()
+            )
+        else:
+            reference = scores.iloc[:0]
+
+        # A window scored by a different model generation is not comparable to a reference
+        # scored by the old one; say so rather than letting the percentile imply otherwise.
+        modal_hash = reference.params_hash.mode() if len(reference) else pd.Series(dtype=object)
+        window_hashes = set(window.params_hash.dropna().unique()) if len(window) else set()
+        if len(modal_hash) and window_hashes and window_hashes != {modal_hash.iloc[0]}:
+            st.warning(
+                "The recent origins were scored by a different model generation "
+                f"(`{'`, `'.join(sorted(window_hashes))}`) than most of the reference days "
+                f"(`{modal_hash.iloc[0]}`). The comparison is indicative until the new "
+                "generation has a season of history of its own."
+            )
+
+        st.markdown("**Champion error against its own season**")
+        champion = scores[scores.model == drift.CHAMPION].sort_values("origin")
+        champion_local = champion.origin.dt.tz_convert(BERLIN)
+        health_fig = go.Figure()
+        health_fig.add_trace(
+            go.Scatter(
+                x=champion_local, y=champion.mae, name="Per-origin MAE", mode="markers",
+                marker=dict(color=MUTED, size=4, opacity=0.32),
+            )
+        )
+        health_fig.add_trace(
+            go.Scatter(
+                x=champion_local,
+                y=champion.mae.rolling(
+                    drift.RECENT_ORIGINS, min_periods=drift.RECENT_ORIGINS
+                ).mean(),
+                name=f"{drift.RECENT_ORIGINS}-origin trailing mean",
+                line=dict(color=GBM, width=2),
+            )
+        )
+        if len(reference) >= 2:
+            low, high = reference.mae.quantile([0.25, 0.75])
+            # layer="below" so the per-origin marks stay readable on top of the band.
+            health_fig.add_hrect(
+                y0=low, y1=high, fillcolor=INTERVAL_FILL, line_width=0, layer="below",
+                annotation_text="seasonal reference IQR "
+                f"(±{reference.attrs.get('window_days', 0)} days)",
+                annotation_position="top left",
+                annotation_font=dict(size=11, color=MUTED),
+            )
+        if len(window):
+            # Pass the tz-aware local Timestamps, not epoch-ms: they serialize exactly like
+            # the trace's x-values above, so the band cannot land two hours off the marks.
+            health_fig.add_vrect(
+                x0=window.origin.min().tz_convert(BERLIN),
+                x1=window.origin.max().tz_convert(BERLIN),
+                fillcolor=DRIFT_COLORS.get(verdict.level, MUTED), opacity=0.13,
+                line_width=0, layer="below",
+            )
+        health_fig.update_layout(
+            **plotly_layout(
+                yaxis_title="MAE over the 24h window (MW)",
+                xaxis_title="Origin (Europe/Berlin)",
+            )
+        )
+        st.plotly_chart(health_fig, width="stretch")
+        st.caption(
+            f"Every retained per-origin MAE for {drift.CHAMPION}, its "
+            f"{drift.RECENT_ORIGINS}-origin trailing mean, and the interquartile range of the "
+            "season-matched days the latest window is judged against. The tinted column is "
+            "that window."
+        )
+
+        st.markdown("**Interval coverage by run**")
+        if len(runs) >= 2:
+            mean = pd.to_numeric(runs.coverage_mean_per_origin, errors="coerce")
+            lower = pd.to_numeric(runs.coverage_ci_lower, errors="coerce")
+            upper = pd.to_numeric(runs.coverage_ci_upper, errors="coerce")
+            coverage_fig = go.Figure(
+                go.Scatter(
+                    x=runs.run_at.dt.tz_convert(BERLIN), y=mean, name="Mean per-origin coverage",
+                    mode="markers+lines", line=dict(color=GBM, width=2),
+                    marker=dict(color=GBM, size=8),
+                    # The stored CI bounds are absolute fractions; plotly wants offsets.
+                    error_y=dict(
+                        type="data", symmetric=False, array=upper - mean, arrayminus=mean - lower,
+                        color=GBM, thickness=1, width=5,
+                    ),
+                )
+            )
+            if pd.notna(coverage["nominal"]):
+                coverage_fig.add_hline(
+                    y=coverage["nominal"], line=dict(color=MUTED, width=1, dash="dash"),
+                    annotation_text="nominal", annotation_position="top left",
+                    annotation_font=dict(size=11, color=MUTED),
+                )
+            if coverage["established"] is not None:
+                coverage_fig.add_hline(
+                    y=coverage["established"], line=dict(color=EXPECTED, width=1, dash="dot"),
+                    annotation_text="established baseline", annotation_position="bottom left",
+                    annotation_font=dict(size=11, color=EXPECTED),
+                )
+            coverage_fig.update_layout(
+                **plotly_layout(
+                    yaxis_title="Interval coverage", xaxis_title="Run (Europe/Berlin)",
+                )
+            )
+            coverage_fig.update_yaxes(tickformat=".0%")
+            st.plotly_chart(coverage_fig, width="stretch")
+            st.caption(
+                "Mean per-origin coverage per run, with the bootstrap confidence interval "
+                "carried through from that run's summary. The dotted line is the baseline "
+                "this model has been holding; the dashed line is the nominal design target."
+            )
+        else:
+            st.caption(
+                "One run recorded — the coverage trend needs at least two."
+                if len(runs) == 1 else
+                "No run recorded yet — the coverage trend needs at least two."
+            )
+
+        st.markdown("**Run ledger**")
+        st.dataframe(run_ledger(runs), hide_index=True, width="stretch")
+
+        st.caption(
+            "The reference is matched by day of the year, starting at ±21 days and widening "
+            "only until it holds enough origins, because January MAE is 2.10× August with no "
+            "drift at all — a pooled comparison would flag every winter forever. The statistic "
+            "is a percentile rather than a z-score because the error distribution is "
+            "right-skewed (mean 1,944 MW, median 1,548 MW, max 10,370 MW). A single window "
+            "above the threshold is only ever *watch*; **regressed** needs two consecutive "
+            "runs, which chance alone produces about once in 2,000. Coverage is judged against "
+            "the coverage this model has established, not the 95% label, because the band "
+            "already under-covers by design and a monitor that is always red is one nobody "
+            "reads. Nothing here fails a workflow: the weekly refresh keeps committing, and "
+            "this panel is where drift surfaces."
+        )
+
+    st.divider()
     st.subheader("Rolling-origin backtest")
     if benchmark is None:
         st.info(

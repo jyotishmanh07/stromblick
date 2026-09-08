@@ -19,6 +19,7 @@ import pandas as pd
 matplotlib.use("Agg")  # report script: never open a GUI window
 import matplotlib.pyplot as plt  # noqa: E402
 
+from energy_forecast import drift
 from energy_forecast.data import load_clean_demand
 from energy_forecast.evaluation import error_slices, metrics
 from energy_forecast.features import FEATURE_COLUMNS, add_features, german_holidays
@@ -47,6 +48,11 @@ TUNING_SUMMARY_PATH = Path("reports/tuning_summary.json")
 README_PATH = Path("README.md")
 RESULTS_START = "<!-- RESULTS-TABLE:START"
 RESULTS_END = "<!-- RESULTS-TABLE:END -->"
+
+# The generation label the forecast log also records (models.py:162 returns it on every
+# ForecastOutput). Bump it there and here together, or the run history and the forecast log
+# stop being cross-referenceable. `params_hash` catches an *unannounced* change on its own.
+MODEL_VERSION = "v1"
 
 MODEL_FACTORIES = {
     "Seasonal naive": SeasonalNaive,
@@ -347,7 +353,94 @@ def plot_feature_importance(
     return {"top_features": top}
 
 
-def main() -> None:
+def record_history(
+    per_origin: pd.DataFrame, summary: dict, origins_used: int, max_origins: int | None,
+    *, no_history: bool = False,
+) -> None:
+    """Append this run to `reports/history/` and print the drift verdict.
+
+    Called last, after `sync_readme_results` and every artifact write, so a crash never
+    records a run whose reports did not land.
+
+    **The verdict is data, never an exit code.** Nothing here raises, calls `sys.exit`, or
+    returns a failing status on `regressed`: `refresh-data.yml` has to keep committing the
+    refreshed snapshot even when the model looks worse than it used to, and drift is
+    surfaced in the dashboard's Model health panel instead. Do not "improve" this into a
+    build gate.
+    """
+    if no_history:
+        print("History append skipped (--no-history).")
+        return
+    if not drift.is_complete_run(origins_used, max_origins):
+        print(f"Capped or partial run ({origins_used} origins) — reports/history/ not updated.")
+        return
+
+    # One stamp for both files, so the run row and the origins it scored agree on when.
+    run_at = pd.Timestamp.now(tz="UTC").floor("s")
+    params_hash = drift.params_fingerprint()
+
+    scores, scores_written = drift.append_origin_history(
+        drift.ORIGIN_HISTORY_PATH, per_origin, model_version=MODEL_VERSION,
+        params_hash=params_hash, run_at=run_at,
+    )
+    # Order matters: the verdict is computed from the *updated* scores but the run ledger
+    # as it stands *before* this run's row is added. `regression_verdict` escalates on
+    # consecutive preceding runs above the threshold, so a ledger that already contained
+    # this run would let the run confirm itself.
+    runs = drift.load_run_history(drift.RUN_HISTORY_PATH)
+    verdict = drift.regression_verdict(scores, runs)
+
+    record = drift.run_record_from_summary(
+        summary, run_at=run_at, verdict=verdict, params_hash=params_hash,
+        model_version=MODEL_VERSION,
+    )
+    _, run_written = drift.append_run_history(drift.RUN_HISTORY_PATH, record)
+
+    print(
+        f"History: {drift.ORIGIN_HISTORY_PATH} "
+        f"{'updated' if scores_written else 'unchanged'} ({len(scores):,} rows), "
+        f"{drift.RUN_HISTORY_PATH} {'updated' if run_written else 'unchanged'} "
+        f"({len(runs) + int(run_written):,} rows), params {params_hash}."
+    )
+    print(f"Drift verdict [{verdict.level}]: {verdict.headline}")
+
+
+def seed_history() -> int:
+    """Bootstrap `reports/history/` from the artifacts already on disk, with no backtest.
+
+    A full run is ~20 minutes and the drift reference needs origins, so without this the
+    first verdict would be a week of scheduled runs away. Reads the committed
+    `benchmark_summary.json` / `benchmark_metrics.csv` and appends both history files —
+    and writes nothing else: it returns before any report, figure or README write.
+
+    Returns a process exit code; seeding from nothing is a user error worth reporting.
+    """
+    missing = [path for path in (SUMMARY_PATH, METRICS_PATH) if not path.exists()]
+    if missing:
+        print(
+            "Cannot seed history: " + ", ".join(str(path) for path in missing) + " missing. "
+            "Run the full benchmark first (PYTHONPATH=src python scripts/benchmark.py)."
+        )
+        return 1
+
+    summary = json.loads(SUMMARY_PATH.read_text(encoding="utf-8"))
+    per_origin = pd.read_csv(METRICS_PATH, parse_dates=["origin"])
+    origins_used = int(summary.get("origins", 0))
+    # The artifacts on disk may themselves be from a capped run; the same completeness rule
+    # applies, or seeding would launder a partial run past the guard in the normal path.
+    if not drift.is_complete_run(origins_used, None):
+        print(
+            f"Cannot seed history: {SUMMARY_PATH} reports only {origins_used} origins "
+            f"(need {drift.MIN_COMPLETE_ORIGINS}). Re-run the full benchmark uncapped."
+        )
+        return 1
+
+    print(f"Seeding history from {SUMMARY_PATH} and {METRICS_PATH} ({origins_used} origins) ...")
+    record_history(per_origin, summary, origins_used, None)
+    return 0
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--initial-train-days", type=int, default=28)
     parser.add_argument("--horizon-hours", type=int, default=24)
@@ -357,7 +450,21 @@ def main() -> None:
         "so origins rotate through all weekdays instead of aliasing onto one.",
     )
     parser.add_argument("--max-origins", type=int, default=None, help="cap origins (for testing)")
+    parser.add_argument(
+        "--no-history", action="store_true",
+        help="run normally but skip the reports/history/ append (for local experiments)",
+    )
+    parser.add_argument(
+        "--seed-history", action="store_true",
+        help="do not backtest: seed reports/history/ from the existing reports/benchmark_* "
+        "artifacts and exit, leaving README.md and every report untouched",
+    )
     args = parser.parse_args()
+
+    if args.seed_history:
+        # Returns before every write below — no report, no figure, and above all no
+        # sync_readme_results, which would clobber the README from stale artifacts.
+        return seed_history()
 
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     frame = load_clean_demand()
@@ -560,49 +667,46 @@ def main() -> None:
     ]
     REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
 
-    SUMMARY_PATH.write_text(
-        json.dumps(
-            {
-                "snapshot_start": str(frame.timestamp.min()),
-                "snapshot_end": str(frame.timestamp.max()),
-                "rows": int(len(frame)),
-                "origins": int(origins_used),
-                "step_hours": int(args.step_hours),
-                "horizon_hours": int(args.horizon_hours),
-                "eval_start": str(test_start),
-                "eval_end": str(test_end),
-                "eval_hours": int(eval_hours),
-                "champion": champion,
-                "lift_vs_seasonal_naive_pct": round(float(lift), 1),
-                "models": {
-                    name: {
-                        "mae_mean": round(float(row.mae_mean), 1),
-                        "mae_std": round(float(row.mae_std), 1),
-                        "rmse_mean": round(float(row.rmse_mean), 1),
-                        "smape_mean": round(float(row.smape_mean), 3),
-                    }
-                    for name, row in summary.iterrows()
-                },
-                "interval_coverage": {k: round(float(v), 2) for k, v in coverage.items()},
-                "significance": {
-                    "comparisons": {
-                        rival: {k: round(float(v), 4) for k, v in stat.items()}
-                        for rival, stat in tests["comparisons"].items()
-                    },
-                    "holiday_slice": (
-                        {k: round(float(v), 4) for k, v in tests["holiday_slice"].items()}
-                        if tests["holiday_slice"] is not None else None
-                    ),
-                    "coverage": {k: round(float(v), 4) for k, v in tests["coverage"].items()},
-                    "champion_beats_all_rivals": bool(beats_all),
-                },
-                "top_features": [list(pair) for pair in (importance or {}).get("top_features", [])],
-                "worst_hour": int(notes["worst_hour"]),
+    # Bound to a name rather than inlined into json.dumps: `record_history` flattens this
+    # exact dict into the run-history row, so the two artifacts cannot disagree.
+    summary_payload = {
+        "snapshot_start": str(frame.timestamp.min()),
+        "snapshot_end": str(frame.timestamp.max()),
+        "rows": int(len(frame)),
+        "origins": int(origins_used),
+        "step_hours": int(args.step_hours),
+        "horizon_hours": int(args.horizon_hours),
+        "eval_start": str(test_start),
+        "eval_end": str(test_end),
+        "eval_hours": int(eval_hours),
+        "champion": champion,
+        "lift_vs_seasonal_naive_pct": round(float(lift), 1),
+        "models": {
+            name: {
+                "mae_mean": round(float(row.mae_mean), 1),
+                "mae_std": round(float(row.mae_std), 1),
+                "rmse_mean": round(float(row.rmse_mean), 1),
+                "smape_mean": round(float(row.smape_mean), 3),
+            }
+            for name, row in summary.iterrows()
+        },
+        "interval_coverage": {k: round(float(v), 2) for k, v in coverage.items()},
+        "significance": {
+            "comparisons": {
+                rival: {k: round(float(v), 4) for k, v in stat.items()}
+                for rival, stat in tests["comparisons"].items()
             },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+            "holiday_slice": (
+                {k: round(float(v), 4) for k, v in tests["holiday_slice"].items()}
+                if tests["holiday_slice"] is not None else None
+            ),
+            "coverage": {k: round(float(v), 4) for k, v in tests["coverage"].items()},
+            "champion_beats_all_rivals": bool(beats_all),
+        },
+        "top_features": [list(pair) for pair in (importance or {}).get("top_features", [])],
+        "worst_hour": int(notes["worst_hour"]),
+    }
+    SUMMARY_PATH.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
 
     # The closest rival is the one the champion beats by the smallest margin.
     worst = max(tests["comparisons"].values(), key=lambda s: s["mean_diff"])
@@ -629,6 +733,13 @@ def main() -> None:
     )
     print(summary.to_string(float_format=lambda v: f"{v:,.1f}"))
 
+    # Last, deliberately: every artifact above has landed, so a crash cannot leave a run
+    # recorded in history whose reports were never written.
+    record_history(
+        per_origin, summary_payload, origins_used, args.max_origins, no_history=args.no_history
+    )
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

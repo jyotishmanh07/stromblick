@@ -30,6 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the commit step rebases before pushing, which cannot work
+          # against the default depth-1 clone.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -75,5 +79,8 @@ jobs:
             echo "Nothing changed."
           else
             git commit -m "Refresh SMARD snapshot and regenerate reports"
+            # reports/history/ is append-only, so a push lost to a concurrent commit
+            # is a permanent hole in the record rather than something next week rewrites.
+            git pull --rebase
             git push
           fi

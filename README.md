@@ -32,6 +32,24 @@ Every lag and rolling feature is shifted first, so current or future demand cann
 
 **Verification** ([verification.py](src/energy_forecast/verification.py)) answers the question a backtest table does not: was the forecast we showed yesterday any good? It has two halves, and the distinction between them is the point. The *replay* refits a fresh model at each of the last seven daily origins on rows dated at or before that origin, so it shows what the model **would have** said — leakage-safe, but computed after the fact. The *log* is a CSV of forecasts written by a daily workflow at the moment they were issued and committed to git, so it shows what the model **did** say, before the outcome existed. Only the second is evidence a replay cannot manufacture; both key off the last *published* hour rather than wall-clock time.
 
+### Model health and when to retrain
+
+**The weights are never stale.** `forecast_with_interval` calls `model.fit(history)` on every forecast (≈0.44 s), and `ForecastService` fits a second model to size the residual band. Nothing is pickled — there is no serialized artifact anywhere in the repo, and every backtest, replay and logged forecast refits from scratch on the freshest data. "The model hasn't been retrained lately" is not a failure mode this project can have.
+
+Three other things *do* go stale:
+
+1. **The learned relationship.** Refitting does not help if the relationship itself has changed — a structural shift in German load (industrial demand, heat-pump and EV uptake, a changed holiday pattern) shows up as error the current features cannot absorb.
+2. **The hyperparameters.** `DEFAULT_PARAMS` were chosen by `scripts/tune.py` against one snapshot; the standing verdict is *keep defaults* (inner gain 3.5%, outer 1.3%, CI [−82, +44] MW).
+3. **The published numbers.** Every figure in the results table describes a snapshot that rolls forward weekly.
+
+[drift.py](src/energy_forecast/drift.py) is what notices. Each complete benchmark run appends one row to `reports/history/benchmark_runs.csv` and its per-origin scores to `reports/history/origin_scores.csv`, and the trailing 14 origins are scored as a **percentile of comparable days from previous years** — season-matched by day-of-year, because January MAE is 2.10× August MAE with no drift at all (2,855 vs 1,357 MW), so any comparison against a pooled average would flag every winter. It is a rank rather than a z-score because the error distribution is heavily right-skewed (mean 1,944, median 1,548, max 10,370). Thresholds are calibrated, not asserted: 2.2% of no-drift windows exceed the 0.90 cut, and `regressed` additionally requires two consecutive runs, which puts false alarms under 1% for one week of latency.
+
+**Re-run `scripts/tune.py` when** model health reports `regressed` on two consecutive weekly runs; `FEATURE_COLUMNS` changes; the retained history covers a season the last search never saw (roughly every six months); or the tuning verdict is over six months old. **Re-examine features when** interval coverage drifts below its established baseline, or an already-weak slice gets materially worse across runs (public-holiday hours already cost +2,741 MW absolute error; the worst hour is 14:00 Berlin).
+
+`model_version` is the literal `"v1"` in [models.py](src/energy_forecast/models.py). **Bump it whenever `DEFAULT_PARAMS` or `FEATURE_COLUMNS` change**, or neither the forecast log nor the health history can tell one model generation from another; `tests/test_api.py` and `tests/test_service.py` assert the value and must change with it.
+
+The verdict is data, never an exit code — the refresh workflow keeps committing, and drift surfaces in the dashboard's Model health panel rather than blocking a run.
+
 ## Results
 
 Full rolling-origin backtest of all three levels over the collected snapshot — every model refit at every origin, no random split — is in **[reports/benchmark.md](reports/benchmark.md)** (regenerate with `PYTHONPATH=src python scripts/benchmark.py`).
@@ -133,7 +151,7 @@ A header metrics row — latest observed demand, data freshness (hours since the
 
 **Track record** — the last seven daily forecasts against what actually happened, with per-day MAE and interval coverage. The upper chart is the *replay*: each day refit on data dated at or before that day's origin, so no future value reaches it, but computed now. The lower chart is the *log*: the forecasts the daily workflow committed to git at the moment it issued them, joined to actuals as SMARD publishes them. The replay is available immediately and the log accrues one day at a time; the tab says which is which rather than blurring them, because only the log rules out hindsight.
 
-**Model quality** — the full rolling-origin backtest from `reports/benchmark.md`: the three-model headline table, per-origin MAE for each model, prediction-interval coverage, permutation importance, and the champion's error slices. Below a divider, the fast trailing-7-day holdout comparison (seasonal-naive vs gradient boosting, with hour/weekday error slices) that runs live in the app. Both carry the same message: the main model has to beat "same hour yesterday" to justify its complexity.
+**Model quality** — opens with **Model health**: a verdict (`ok` / `watch` / `regressed` / `unknown`) for the trailing 14 origins against comparable days from previous years, the champion's per-origin error over time with its seasonal reference band, and interval coverage per run against its established baseline rather than the 95% label. Below that, the full rolling-origin backtest from `reports/benchmark.md`: the three-model headline table, per-origin MAE for each model, prediction-interval coverage, permutation importance, and the champion's error slices. Below a divider, the fast trailing-7-day holdout comparison (seasonal-naive vs gradient boosting, with hour/weekday error slices) that runs live in the app. Both carry the same message: the main model has to beat "same hour yesterday" to justify its complexity.
 
 **Anomalies** — observed demand against what the model expected for each hour (dashed), over a selectable 7/14/28-day window. The band is the expected value ± the 1st/99th percentile of validation residuals, learned from the week *before* the window so the bounds never see the data they score. Hours whose deviation leaves the band get a red ✕ and a table row with observed, expected, and deviation in MW. These are statistical flags — prompts to investigate weather, calendar, or grid events — not confirmed anomalies.
 
@@ -182,6 +200,7 @@ The FastAPI service is at `http://localhost:8000`; the Streamlit dashboard is at
 
 - Demand-only features are the first baseline. Renewable generation, temperature, wind, and solar forecasts should be added only after the demand-only comparison is stable.
 - The bundled interval is empirical, based on historical validation residual magnitudes; it is not a calibrated probabilistic forecast — and it measurably under-covers (93.2% against a 95% target, CI [91.5%, 94.7%]). Sweeping the residual-window length and band quantile against coverage-versus-sharpness is the obvious next task.
-- One year of data means seasonal patterns are observed once. The classification track works with a few hundred labelled days, so its rankings are indicative rather than settled.
+- One year of data means seasonal patterns are observed once. The classification track works with a few hundred labelled days, so its rankings are indicative rather than settled. The same limit binds the drift monitor: until the retained history spans more than a year, some windows have no comparable season to score against and correctly report `unknown`, and the first winter will likely read `watch` simply because no earlier winter exists to compare it with.
+- The run ledger grows one row per week, so it will not support a statistic of its own for a long time. The per-origin file is the primary artifact for exactly that reason.
 - SMARD licensing, export shape, revision policy, and availability should be documented for the exact dataset snapshot used in a published analysis.
 - A production version should add scheduled ingestion, persistent model artifacts, monitoring, weather covariates, and a final untouched test report.
