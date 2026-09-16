@@ -525,56 +525,57 @@ def assess(
     if n_reference < min_reference or n_window < 2:
         return verdict(
             "unknown",
-            f"Not enough comparable history to judge drift yet: {n_reference} reference "
-            f"days within {reference_window_days} days of this date in earlier years, "
-            f"against a minimum of {min_reference}.",
-            f"{n_reference} reference origins (need {min_reference}) and a window of "
-            f"{n_window} origins (need 2); guessing a verdict from this would be noise.",
+            f"Not enough past data yet to judge. Only {n_reference} similar days from previous "
+            f"years are available to compare against, and at least {min_reference} are needed.",
+            f"{n_reference} similar days (need {min_reference}), and {n_window} day"
+            f"{'' if n_window == 1 else 's'} of recent error to score (need at least 2). "
+            "A verdict from this little data would be noise.",
             float("nan"),
         )
 
     percentile = float((reference.mae.to_numpy(dtype=float) < window_mae).mean())
     shared = (
-        f"Error over the last {n_window} days sits at the {_ordinal(round(percentile * 100))} "
-        f"percentile of {n_reference} comparable days within {reference_window_days} days "
-        f"of this date in earlier years"
+        f"Over the last {n_window} days the model's average error was higher than "
+        f"{round(percentile * 100)}% of {n_reference} similar days from previous years "
+        f"(days falling within {reference_window_days} days of the same date)"
     )
 
     if percentile <= watch:
         return verdict(
-            "ok", f"{shared} — normal for this time of year.",
-            f"Percentile {percentile:.2f} is at or below the watch threshold {watch:.2f}.",
+            "ok", f"{shared}. Normal for this time of year.",
+            f"Anything up to {watch:.0%} counts as normal for the season; this is "
+            f"{percentile:.0%}.",
             percentile,
         )
     if percentile <= regressed:
         return verdict(
-            "watch", f"{shared} — higher than usual for this time of year, worth watching.",
-            f"Percentile {percentile:.2f} is above the watch threshold {watch:.2f} but not "
-            f"above the regression threshold {regressed:.2f}.",
+            "watch", f"{shared}. Higher than usual for this time of year, worth watching.",
+            f"{percentile:.0%} is above the {watch:.0%} mark that counts as normal, but below "
+            f"the {regressed:.0%} mark that would flag a real problem.",
             percentile,
         )
     if not allow_regressed:
         return verdict(
-            "watch", f"{shared} — higher than usual for this time of year, worth watching.",
-            f"Percentile {percentile:.2f} is above {regressed:.2f}, but a {n_window}-origin "
-            "live window is too noisy to condemn on (5.0% of no-drift 7-origin windows "
-            "exceed it); only the full benchmark can call a regression.",
+            "watch", f"{shared}. Higher than usual for this time of year, worth watching.",
+            f"{percentile:.0%} is above {regressed:.0%}, but {n_window} days is too small a "
+            "sample to condemn the model on. About 1 in 20 trouble-free weeks looks this bad "
+            "by chance. Only the full weekly benchmark can call a regression.",
             percentile,
         )
     if consecutive_runs < 1:
         return verdict(
-            "watch", f"{shared} — higher than usual for this time of year, worth watching.",
-            f"Percentile {percentile:.2f} is above {regressed:.2f}, but this is the first run "
-            f"above it and 2.2% of no-drift {n_window}-origin windows do that by chance; a "
-            "second consecutive crossing would be called a regression.",
+            "watch", f"{shared}. Higher than usual for this time of year, worth watching.",
+            f"{percentile:.0%} is above {regressed:.0%}, but this is the first run that high, "
+            "and about 1 in 45 runs does that by chance even with nothing wrong. A second run "
+            "in a row would be called a regression.",
             percentile,
         )
     return verdict(
         "regressed",
-        f"{shared} — the {_ordinal(consecutive_runs + 1)} run in a row that high, so the "
+        f"{shared}. That is the {_ordinal(consecutive_runs + 1)} run in a row this high, so the "
         "model looks worse than it used to be.",
-        f"Percentile {percentile:.2f} is above {regressed:.2f} for {consecutive_runs + 1} "
-        "consecutive runs, which chance alone would produce roughly once in 2000 runs.",
+        f"{percentile:.0%} is above {regressed:.0%} for {consecutive_runs + 1} runs in a row. "
+        "Chance alone would do that about once in 2,000 runs.",
         percentile,
     )
 
@@ -668,12 +669,16 @@ def coverage_drift(
             "level": "unknown", "established": None, "mean": float("nan"),
             "ci_lower": float("nan"), "ci_upper": float("nan"), "drop": float("nan"),
             "nominal": nominal, "baseline_runs": 0,
-            "headline": "Not enough run history to say whether interval coverage has drifted.",
+            "headline": "Not enough past runs yet to tell whether the forecast range is still "
+            "as reliable as it was.",
             "reason": reason,
         }
 
     if runs is None or len(runs) < 2:
-        return unknown(f"{0 if runs is None else len(runs)} runs recorded; need at least 2.")
+        count = 0 if runs is None else len(runs)
+        return unknown(
+            f"{count} run{'' if count == 1 else 's'} recorded so far; at least 2 are needed."
+        )
 
     ordered = runs.sort_values(["run_at", "snapshot_end"]).reset_index(drop=True)
     latest = ordered.iloc[-1]
@@ -693,32 +698,32 @@ def coverage_drift(
     if not np.isnan(ci_upper) and ci_upper < established:
         level = "regressed"
         headline = (
-            f"Interval coverage fell to {mean:.1%}, and its confidence interval sits "
-            f"entirely below the {established:.1%} this model had been holding."
+            f"The forecast range caught only {mean:.1%} of actual values, clearly below the "
+            f"{established:.1%} this model had been holding."
         )
         reason = (
-            f"CI upper bound {ci_upper:.4f} is below the established {established:.4f}, so the "
-            "drop is larger than per-origin sampling noise."
+            f"Even the optimistic end of the margin of error ({ci_upper:.1%}) sits below the "
+            f"established {established:.1%}, so this is more than sampling noise."
         )
     elif drop > watch_drop:
         level = "watch"
         headline = (
-            f"Interval coverage slipped to {mean:.1%} from the {established:.1%} this model "
-            "had been holding — worth watching."
+            f"The forecast range caught {mean:.1%} of actual values, down from the "
+            f"{established:.1%} this model had been holding. Worth watching."
         )
         reason = (
-            f"Mean is {drop:.4f} below the established {established:.4f} (watch drop "
-            f"{watch_drop:.4f}), but the confidence interval still overlaps it."
+            f"That is {drop:.1%} below the established {established:.1%}, but the margin of "
+            "error still overlaps it."
         )
     else:
         level = "ok"
         headline = (
-            f"Interval coverage is {mean:.1%}, in line with the {established:.1%} this model "
-            "has been holding."
+            f"The forecast range caught {mean:.1%} of actual values, in line with the "
+            f"{established:.1%} this model has been holding."
         )
         reason = (
-            f"Mean {mean:.4f} is within {watch_drop:.4f} of the established {established:.4f}. "
-            f"The {nominal:.0%} nominal is a design target, not the drift baseline."
+            f"Within {watch_drop:.1%} of the established {established:.1%}. The {nominal:.0%} "
+            "label is a design target, not the baseline drift is judged against."
         )
 
     return {

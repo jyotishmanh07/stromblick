@@ -18,9 +18,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from energy_forecast import drift
-from energy_forecast.evaluation import error_slices, metrics
 from energy_forecast.events import HighDemandClassifier, daily_feature_frame
-from energy_forecast.models import HistGradientBoostingForecast, SeasonalNaive
 from energy_forecast.service import ForecastService
 from energy_forecast.theme import (
     ANOMALY,
@@ -146,31 +144,6 @@ def verdict_badge(level: str) -> str:
     )
 
 
-def run_ledger(runs: pd.DataFrame) -> pd.DataFrame:
-    """The last eight recorded benchmark runs, formatted for display."""
-
-    def stamp(column: pd.Series) -> list[str]:
-        local = pd.to_datetime(column, utc=True).dt.tz_convert(BERLIN)
-        return [t.strftime("%d %b %Y %H:%M") if pd.notna(t) else "—" for t in local]
-
-    tail = runs.tail(8)
-    return pd.DataFrame(
-        {
-            "Run date": stamp(tail.run_at),
-            "Snapshot end": stamp(tail.snapshot_end),
-            "Origins": [f"{v:,.0f}" if pd.notna(v) else "—" for v in tail.origins],
-            "Champion MAE": [
-                f"{v:,.0f} MW" if pd.notna(v) else "—" for v in tail.champion_mae_mean
-            ],
-            "Coverage": [
-                f"{v:.1%}" if pd.notna(v) else "—" for v in tail.coverage_mean_per_origin
-            ],
-            "Verdict": [str(v) if isinstance(v, str) else "—" for v in tail.drift_level],
-        }
-    )
-
-
-WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 REPORTS = Path("reports")
 
 st.set_page_config(page_title="Stromblick", page_icon="⚡", layout="wide")
@@ -236,23 +209,6 @@ def drift_history(runs_key: str, scores_key: str):
     if scores.empty:
         return None
     return drift.load_run_history(drift.RUN_HISTORY_PATH), scores
-
-
-@st.cache_data(show_spinner="Comparing models on the trailing week...")
-def model_comparison(history: pd.DataFrame):
-    train, test = history.iloc[: -24 * 7], history.iloc[-24 * 7 :]
-    test = test[test.demand_mw.notna()].reset_index(drop=True)  # SMARD hours not yet published
-    rows, gbm_predicted = [], None
-    for name, model in [
-        ("Seasonal naive", SeasonalNaive()),
-        ("HistGradientBoosting", HistGradientBoostingForecast()),
-    ]:
-        model.fit(train)
-        predicted = model.predict(pd.DatetimeIndex(test.timestamp))
-        if name == "HistGradientBoosting":
-            gbm_predicted = predicted
-        rows.append({"model": name, **metrics(test.demand_mw.to_numpy(), predicted)})
-    return pd.DataFrame(rows), test.reset_index(drop=True), gbm_predicted
 
 
 @st.cache_data(show_spinner="Scoring the window for anomalies...")
@@ -325,7 +281,7 @@ col2.metric(
     "Data freshness",
     "unknown" if age_hours is None else f"{age_hours:,.0f}h ago",
     help="Hours since the most recent published SMARD observation. Actual grid load is "
-    "published well after the fact — a lag from several hours up to about a day is normal, "
+    "published well after the fact. A lag from several hours up to about a day is normal, "
     "so this figure is rarely close to zero.",
 )
 col3.metric("Data source", service.data_source)
@@ -403,18 +359,13 @@ with forecast_tab:
     st.plotly_chart(fig, width="stretch")
     gap_note = (
         f" The {len(gaps)} shaded band{'s' if len(gaps) > 1 else ''} mark hours SMARD has "
-        "indexed but not yet published — missing readings, not a drop in demand. They are "
-        "reported rather than imputed."
-        if gaps else
-        " Gaps in the observed line would mark hours SMARD has indexed but not yet published; "
-        "there are none in this window."
+        "indexed but not yet published."
+        if gaps else ""
     )
     st.caption(
-        "Observed demand for the last three days, then the 24-hour forecast (the dotted line "
-        "marks the forecast start). Times are Europe/Berlin, the timezone demand actually "
-        "follows. The shaded band around the forecast is ± the 95th percentile of absolute "
-        "residuals the model made on a held-out validation week — its width reflects how wrong "
-        "the model has recently been, not a probabilistic guarantee." + gap_note
+        "Observed demand for the last three days, then the 24-hour forecast; the dotted line "
+        "marks the forecast start and the shaded band is the model's recent error magnitude."
+        + gap_note
     )
 
 
@@ -475,14 +426,8 @@ with record_tab:
             st.markdown(line)
 
         st.caption(
-            "Seven separate 24-hour forecasts, one per day. Each is refit on data dated at or "
-            "before its own origin and run forward through the same code path as the live "
-            "forecast, so no future value can reach it — but it is computed after the fact, with "
-            "today's data, so it shows what the model *would have* said, not what it did say. "
-            "The band is ± the 95th percentile of absolute residuals over the week *before* the "
-            "replayed window: an empirical error magnitude, not a calibrated probability. "
-            "Shaded hours are indexed by SMARD but not yet published; they are excluded from the "
-            "scores rather than imputed, which is why some windows show fewer than 24 hours."
+            "Seven separate 24-hour forecasts, one per day, each refit on data dated at or "
+            "before its own origin."
         )
 
     st.divider()
@@ -541,15 +486,13 @@ with record_tab:
         if scored_origins == 0:
             st.caption(
                 f"{len(published_scores)} forecast{'s' if len(published_scores) != 1 else ''} "
-                "logged, none scorable yet — SMARD has not published any of the hours they cover. "
-                "The comparison fills in as those readings arrive."
+                "logged, none scorable yet. SMARD has not published any of the hours they cover."
             )
         elif scored_origins < 3:
             st.caption(
                 f"Only {scored_origins} logged forecast"
                 f"{'s have' if scored_origins != 1 else ' has'} a published hour to score "
-                "against. A day or two is an anecdote, not evidence — read it as a smoke test "
-                "until the log is longer."
+                "against, so read it as a smoke test."
             )
         else:
             mean_mae = float(published_scores.mae.mean())
@@ -558,11 +501,8 @@ with record_tab:
             )
 
         st.caption(
-            "These rows were written before the outcome was known and are never revised — a "
-            "re-issued forecast for the same hour replaces the older one, and nothing else does. "
-            "That is the one thing a replay cannot manufacture. The actuals are SMARD's readings "
-            "as currently published, and SMARD does revise history, so a score here can shift "
-            "slightly after the fact."
+            "Forecasts the daily workflow committed to git before the outcome was known, "
+            "against what SMARD has since published."
         )
 
     st.caption(
@@ -596,7 +536,7 @@ with quality_tab:
         st.markdown(verdict_badge(live.level), unsafe_allow_html=True)
         st.markdown(live.headline)
         st.caption(
-            "Provisional, from the last 7 replayed days and capped at *watch* — a stand-in "
+            "Provisional, from the last 7 replayed days and capped at *watch*: a stand-in "
             "for the weekly verdict until the run history exists."
         )
     else:
@@ -617,25 +557,26 @@ with quality_tab:
         window_mae = verdict.window_mae
         gap = window_mae - verdict.reference_median
         status[1].metric(
-            f"Trailing {drift.RECENT_ORIGINS}-origin MAE",
+            f"Average error, last {drift.RECENT_ORIGINS} days",
             f"{window_mae:,.0f} MW" if pd.notna(window_mae) else "—",
-            delta=f"{gap:+,.0f} MW vs same season" if pd.notna(gap) else None,
+            delta=f"{gap:+,.0f} MW vs similar days" if pd.notna(gap) else None,
             # Lower error is better, so a positive delta must not read as good news.
             delta_color="inverse",
-            help=f"Mean 24-hour MAE over the {verdict.window_origins} most recent scored "
-            "origins, against the median of the season-matched reference days beside it.",
+            help=f"How far off the forecast was on average over the {verdict.window_origins} "
+            "most recent days scored, next to the typical miss on similar days from "
+            "previous years.",
         )
 
         coverage_help = (
-            "Mean per-origin coverage of the prediction interval in the latest run, judged "
-            "against the coverage this model has been establishing across earlier runs — not "
-            "against the 95% label, which the band under-covers by design."
+            "How often actual demand landed inside the forecast's shaded range in the latest "
+            "run. Judged against what this model has actually been achieving, not the 95% "
+            "label it aims at. The range is known to be slightly too narrow."
         )
         if coverage["level"] == "unknown":
-            status[2].metric("Interval coverage", "—", help=coverage_help)
+            status[2].metric("Actuals inside the range", "—", help=coverage_help)
         else:
             status[2].metric(
-                "Interval coverage",
+                "Actuals inside the range",
                 f"{coverage['mean']:.1%}",
                 delta=f"{-100 * coverage['drop']:+.1f} pp vs baseline",
                 help=coverage_help,
@@ -662,13 +603,13 @@ with quality_tab:
                 "generation has a season of history of its own."
             )
 
-        st.markdown("**Champion error against its own season**")
+        st.markdown("**How recent error compares with the same time of year**")
         champion = scores[scores.model == drift.CHAMPION].sort_values("origin")
         champion_local = champion.origin.dt.tz_convert(BERLIN)
         health_fig = go.Figure()
         health_fig.add_trace(
             go.Scatter(
-                x=champion_local, y=champion.mae, name="Per-origin MAE", mode="markers",
+                x=champion_local, y=champion.mae, name="Daily error", mode="markers",
                 marker=dict(color=MUTED, size=4, opacity=0.32),
             )
         )
@@ -678,7 +619,7 @@ with quality_tab:
                 y=champion.mae.rolling(
                     drift.RECENT_ORIGINS, min_periods=drift.RECENT_ORIGINS
                 ).mean(),
-                name=f"{drift.RECENT_ORIGINS}-origin trailing mean",
+                name=f"{drift.RECENT_ORIGINS}-day average",
                 line=dict(color=GBM, width=2),
             )
         )
@@ -687,7 +628,7 @@ with quality_tab:
             # layer="below" so the per-origin marks stay readable on top of the band.
             health_fig.add_hrect(
                 y0=low, y1=high, fillcolor=INTERVAL_FILL, line_width=0, layer="below",
-                annotation_text="seasonal reference IQR "
+                annotation_text="typical for this time of year "
                 f"(±{reference.attrs.get('window_days', 0)} days)",
                 annotation_position="top left",
                 annotation_font=dict(size=11, color=MUTED),
@@ -703,81 +644,15 @@ with quality_tab:
             )
         health_fig.update_layout(
             **plotly_layout(
-                yaxis_title="MAE over the 24h window (MW)",
-                xaxis_title="Origin (Europe/Berlin)",
+                yaxis_title="Average error (MW)",
+                xaxis_title="Day (Europe/Berlin)",
             )
         )
         st.plotly_chart(health_fig, width="stretch")
         st.caption(
-            f"Every retained per-origin MAE for {drift.CHAMPION}, its "
-            f"{drift.RECENT_ORIGINS}-origin trailing mean, and the interquartile range of the "
-            "season-matched days the latest window is judged against. The tinted column is "
-            "that window."
-        )
-
-        st.markdown("**Interval coverage by run**")
-        if len(runs) >= 2:
-            mean = pd.to_numeric(runs.coverage_mean_per_origin, errors="coerce")
-            lower = pd.to_numeric(runs.coverage_ci_lower, errors="coerce")
-            upper = pd.to_numeric(runs.coverage_ci_upper, errors="coerce")
-            coverage_fig = go.Figure(
-                go.Scatter(
-                    x=runs.run_at.dt.tz_convert(BERLIN), y=mean, name="Mean per-origin coverage",
-                    mode="markers+lines", line=dict(color=GBM, width=2),
-                    marker=dict(color=GBM, size=8),
-                    # The stored CI bounds are absolute fractions; plotly wants offsets.
-                    error_y=dict(
-                        type="data", symmetric=False, array=upper - mean, arrayminus=mean - lower,
-                        color=GBM, thickness=1, width=5,
-                    ),
-                )
-            )
-            if pd.notna(coverage["nominal"]):
-                coverage_fig.add_hline(
-                    y=coverage["nominal"], line=dict(color=MUTED, width=1, dash="dash"),
-                    annotation_text="nominal", annotation_position="top left",
-                    annotation_font=dict(size=11, color=MUTED),
-                )
-            if coverage["established"] is not None:
-                coverage_fig.add_hline(
-                    y=coverage["established"], line=dict(color=EXPECTED, width=1, dash="dot"),
-                    annotation_text="established baseline", annotation_position="bottom left",
-                    annotation_font=dict(size=11, color=EXPECTED),
-                )
-            coverage_fig.update_layout(
-                **plotly_layout(
-                    yaxis_title="Interval coverage", xaxis_title="Run (Europe/Berlin)",
-                )
-            )
-            coverage_fig.update_yaxes(tickformat=".0%")
-            st.plotly_chart(coverage_fig, width="stretch")
-            st.caption(
-                "Mean per-origin coverage per run, with the bootstrap confidence interval "
-                "carried through from that run's summary. The dotted line is the baseline "
-                "this model has been holding; the dashed line is the nominal design target."
-            )
-        else:
-            st.caption(
-                "One run recorded — the coverage trend needs at least two."
-                if len(runs) == 1 else
-                "No run recorded yet — the coverage trend needs at least two."
-            )
-
-        st.markdown("**Run ledger**")
-        st.dataframe(run_ledger(runs), hide_index=True, width="stretch")
-
-        st.caption(
-            "The reference is matched by day of the year, starting at ±21 days and widening "
-            "only until it holds enough origins, because January MAE is 2.10× August with no "
-            "drift at all — a pooled comparison would flag every winter forever. The statistic "
-            "is a percentile rather than a z-score because the error distribution is "
-            "right-skewed (mean 1,944 MW, median 1,548 MW, max 10,370 MW). A single window "
-            "above the threshold is only ever *watch*; **regressed** needs two consecutive "
-            "runs, which chance alone produces about once in 2,000. Coverage is judged against "
-            "the coverage this model has established, not the 95% label, because the band "
-            "already under-covers by design and a monitor that is always red is one nobody "
-            "reads. Nothing here fails a workflow: the weekly refresh keeps committing, and "
-            "this panel is where drift surfaces."
+            "Each dot is one day's average error; the line smooths it over "
+            f"{drift.RECENT_ORIGINS} days. The grey band is where similar days from previous "
+            "years usually land, and the tinted column is the stretch being judged above."
         )
 
     st.divider()
@@ -785,8 +660,7 @@ with quality_tab:
     if benchmark is None:
         st.info(
             "Run `PYTHONPATH=src python scripts/benchmark.py` to generate the full backtest "
-            "(`reports/benchmark_summary.json` + `reports/benchmark_metrics.csv`). "
-            "Showing the trailing-week comparison below only."
+            "(`reports/benchmark_summary.json` + `reports/benchmark_metrics.csv`)."
         )
     else:
         summary, per_origin = benchmark
@@ -816,7 +690,7 @@ with quality_tab:
         )
         st.dataframe(table, hide_index=True, width="stretch")
         st.markdown(
-            f"**{summary['champion']}** has the lowest error — MAE "
+            f"**{summary['champion']}** has the lowest error, with MAE "
             f"**{summary['lift_vs_seasonal_naive_pct']:.1f}%** below the seasonal-naive baseline. "
             f"Prediction-interval coverage: **{coverage['empirical']:.1f}%** of observed values "
             f"land inside the {coverage['nominal']:.0f}% nominal band "
@@ -830,7 +704,7 @@ with quality_tab:
             st.markdown(
                 f"Paired bootstrap over {closest['n']} origins puts that advantage at "
                 f"**[{-closest['ci_upper']:,.0f}, {-closest['ci_lower']:,.0f}] MW** against the "
-                f"closest rival (Wilcoxon p = {closest['wilcoxon_p']:.1e}) — the gap is not "
+                f"closest rival (Wilcoxon p = {closest['wilcoxon_p']:.1e}). The gap is not "
                 "sampling noise. Mean per-origin interval coverage is "
                 f"{100 * cov_test['mean_coverage']:.1f}% "
                 f"(95% CI [{100 * cov_test['ci_lower']:.1f}%, {100 * cov_test['ci_upper']:.1f}%]) "
@@ -849,14 +723,13 @@ with quality_tab:
         origin_fig.update_layout(
             **plotly_layout(
                 yaxis_title="MAE over the 24h window (MW)",
-                xaxis_title="Origin — 14-origin trailing mean",
+                xaxis_title="Origin (14-origin trailing mean)",
             )
         )
         st.plotly_chart(origin_fig, width="stretch")
         st.caption(
-            "Each line is a 14-origin trailing mean of that model's 24-hour MAE; "
-            "HistGradientBoosting stays below both baselines across the whole year, not just on "
-            "average. The raw per-origin detail is in `reports/benchmark.md`."
+            "Each line is a 14-origin trailing mean of that model's 24-hour MAE. "
+            "HistGradientBoosting stays below both baselines across the whole year."
         )
 
         importance_png = REPORTS / "figures" / "benchmark_feature_importance.png"
@@ -866,46 +739,6 @@ with quality_tab:
             cols[0].image(str(importance_png), caption="Permutation importance (validation week)")
         if slices_png.exists():
             cols[1].image(str(slices_png), caption=f"Where {summary['champion']} errs")
-
-    st.divider()
-    st.subheader("Trailing-week holdout")
-    if len(history) >= 24 * 35:
-        comparison, holdout, gbm_predicted = model_comparison(history)
-        st.dataframe(
-            comparison.round({"mae": 0, "rmse": 0, "smape": 2}), hide_index=True,
-            width="stretch",
-        )
-        st.caption(
-            "Metrics on the trailing 7-day holdout — the fast honesty check that runs live. "
-            "This panel is a single 168-hour recursive forecast, whereas the Track record tab "
-            "replays seven separate 24-hour forecasts, the horizon the product actually ships. "
-            "Mean absolute error for HistGradientBoosting, sliced by local hour and weekday:"
-        )
-        slices = error_slices(holdout, gbm_predicted)
-        left, right = st.columns(2)
-        by_hour = slices["hour"].sort_values("hour")
-        hour_fig = go.Figure(
-            go.Bar(x=by_hour.hour, y=by_hour.absolute_error, marker_color=GBM)
-        )
-        hour_fig.update_layout(
-            **plotly_layout(xaxis_title="Hour (Berlin)", yaxis_title="MAE (MW)", hovermode="x")
-        )
-        left.plotly_chart(hour_fig, width="stretch")
-        by_weekday = slices["weekday"].copy()
-        by_weekday["weekday"] = pd.Categorical(by_weekday.weekday, WEEKDAY_ORDER, ordered=True)
-        by_weekday = by_weekday.sort_values("weekday")
-        weekday_fig = go.Figure(
-            go.Bar(
-                x=[d[:3] for d in by_weekday.weekday], y=by_weekday.absolute_error,
-                marker_color=GBM,
-            )
-        )
-        weekday_fig.update_layout(
-            **plotly_layout(xaxis_title="Weekday", yaxis_title="MAE (MW)", hovermode="x")
-        )
-        right.plotly_chart(weekday_fig, width="stretch")
-    else:
-        st.info("At least 35 days of hourly data are needed for the comparison panel.")
 
 
 # --------------------------------------------------------------------------------------
@@ -967,9 +800,7 @@ with anomaly_tab:
             st.caption(f"No hour in {choice.lower()} left the 99% residual bounds.")
         else:
             st.caption(
-                f"{len(flagged)} of {len(anomalies)} hours flagged (99% residual bounds). "
-                "The bounds are learned from the validation week *before* this window, so they "
-                "never see the data they score."
+                f"{len(flagged)} of {len(anomalies)} hours flagged (99% residual bounds)."
             )
             st.dataframe(
                 flagged[["timestamp", "demand_mw", "expected_demand_mw", "deviation_mw"]].round(1),
@@ -984,7 +815,7 @@ with event_tab:
     st.subheader("Is tomorrow a high-demand day?")
     st.markdown(
         "A second problem type on the same data. Instead of *how much* demand each hour, this "
-        "asks whether the coming day lands in the **top 30% of the trailing month's peaks** — "
+        "asks whether the coming day lands in the **top 30% of the trailing month's peaks**, "
         "the shape a reserve or staffing decision takes. The threshold is computed from earlier "
         "days only and shifted, so the rule that judges a day is fixed before the day is seen."
     )
@@ -998,7 +829,7 @@ with event_tab:
         right.metric("Threshold to clear", f"{risk['threshold_mw']:,.0f} MW")
         st.caption(
             f"Scored for {risk['date']} against {risk['labelled_days']:,} labelled days. The "
-            "probability is only meaningful next to the base rate beside it — a 30% forecast is "
+            "probability is only meaningful next to the base rate beside it: a 30% forecast is "
             "high when the base rate is 12% and unremarkable when it is 30%."
         )
 
@@ -1011,8 +842,8 @@ with event_tab:
     else:
         st.divider()
         st.subheader("Chronological backtest")
-        for key, block in classification.items():
-            st.markdown(f"**{block['label']}** — {block['scored_days']:,} days scored")
+        for block in classification.values():
+            st.markdown(f"**{block['label']}**: {block['scored_days']:,} days scored")
             table = pd.DataFrame(
                 [
                     {
@@ -1026,11 +857,8 @@ with event_tab:
                 ]
             )
             st.dataframe(table, hide_index=True, width="stretch")
-            for figure in (REPORTS / "figures" / f"classification_pr_{key}.png",):
-                if figure.exists():
-                    st.image(str(figure), width="stretch")
         st.caption(
-            "PR-AUC is read against the base rate, not against 0.5 — the lift column is the "
+            "PR-AUC is read against the base rate, not against 0.5. The lift column is the "
             "honest version. On the anomaly target the calendar-only baseline nearly matches "
             "the gradient-boosted model, which says those days are mostly a calendar "
             "phenomenon (holidays and DST) rather than a demand-dynamics one."
@@ -1058,7 +886,7 @@ with about_tab:
             f"{len(metadata['chunk_urls'])} weekly chunks."
         )
         st.markdown(
-            f"**{metadata['source']}** (CC BY 4.0), module {metadata['module_id']} — Germany "
+            f"**{metadata['source']}** (CC BY 4.0), module {metadata['module_id']}: Germany "
             f"actual total grid load. **{metadata['rows']:,} hourly rows** from "
             f"`{metadata['first_timestamp']}` to `{metadata['last_timestamp']}`. {origin} "
             "SMARD may revise historical values; published results should cite the snapshot "
@@ -1076,7 +904,7 @@ with about_tab:
             failed = [c for c in quality["checks"] if not c["passed"]]
             if not failed:
                 st.success(
-                    f"Data-quality gate passed — all {len(quality['checks'])} checks clean "
+                    f"Data-quality gate passed: all {len(quality['checks'])} checks clean "
                     "(schema, uniqueness, plausible range, continuity, unpublished hours). "
                     + (
                         "Live data is re-validated on every refresh; it is only adopted if the "
@@ -1087,7 +915,7 @@ with about_tab:
             else:
                 st.warning(
                     "Data-quality gate flagged: "
-                    + "; ".join(f"**{c['name']}** — {c['detail']}" for c in failed)
+                    + "; ".join(f"**{c['name']}**: {c['detail']}" for c in failed)
                 )
     elif service.data_source.startswith("deterministic"):
         st.markdown(
@@ -1115,7 +943,7 @@ with about_tab:
         "- **Honest baseline.** The gradient-boosting model is judged against seasonal-naive: "
         "if it cannot beat \"same hour yesterday\", it is not earning its complexity.\n"
         "- **Empirical intervals and anomalies.** Both come from validation-residual "
-        "magnitudes only — not calibrated probabilistic forecasts, and anomalies are prompts "
+        "magnitudes only, not calibrated probabilistic forecasts, and anomalies are prompts "
         "to investigate weather, calendar, or grid context rather than confirmed events.\n"
         "- **Tested claims.** The champion's margin over each rival carries a paired bootstrap "
         "CI and a Wilcoxon/Diebold-Mariano p-value, computed per origin because hours inside "
@@ -1123,6 +951,41 @@ with about_tab:
         "- **SQL reporting layer.** EDA aggregations and error slices run against a DuckDB "
         "warehouse (`fact_demand`, `dim_calendar`, `fact_forecast`) built from the same "
         "snapshot; each query is tested against its pandas equivalent."
+    )
+
+    st.subheader("How to read these charts")
+    st.markdown(
+        "- **The forecast band.** ± the 95th percentile of absolute residuals the model made on "
+        "a held-out validation week. Its width reflects how wrong the model has recently been. It "
+        "is an empirical error magnitude, not a calibrated probability and not a coverage "
+        "guarantee.\n"
+        "- **Unpublished hours.** SMARD indexes each hour before publishing its value, so the "
+        "most recent hours often carry no reading. They appear as gaps or shaded bands and are "
+        "reported rather than imputed, and excluded from the scores rather than filled in, "
+        "which is why some 24-hour windows show fewer than 24 hours scored.\n"
+        "- **Replay versus published log.** The replayed week refits a model at each origin on "
+        "rows dated at or before that origin, so no future value can reach it. But it is "
+        "computed after the fact, with today's data, so it shows what the model *would have* "
+        "said, not what it did say. The published log holds rows written before the outcome was "
+        "known and never revised; a re-issued forecast for the same hour replaces the older one, "
+        "and nothing else does. That is the one thing a replay cannot manufacture. Until about "
+        "three origins have a published hour to score against, read the log as a smoke test: a "
+        "day or two is an anecdote, not evidence.\n"
+        "- **Scores can move.** Actuals are SMARD's readings *as currently published*, and SMARD "
+        "does revise history, so a score already shown here can shift slightly after the fact.\n"
+        "- **Model health.** The reference is matched by day of the year, starting at ±21 days "
+        "and widening only until it holds enough origins, because January MAE is 2.10× August "
+        "with no drift at all, and a pooled comparison would flag every winter forever. The "
+        "statistic is a percentile rather than a z-score because the error distribution is "
+        "right-skewed (mean 1,944 MW, median 1,548 MW, max 10,370 MW). A single window above the "
+        "threshold is only ever *watch*; **regressed** needs two consecutive runs, which chance "
+        "alone produces about once in 2,000. Coverage is judged against the coverage this model "
+        "has established, not the 95% label, because the band already under-covers by design and "
+        "a monitor that is always red is one nobody reads. Nothing here fails a workflow: the "
+        "weekly refresh keeps committing, and that panel is where drift surfaces.\n"
+        "- **Anomaly bounds.** The 99% residual bounds are learned from the validation week "
+        "*before* the window being scored, so they never see the data they judge. A flag is a "
+        "prompt to investigate weather, calendar or grid context, not a confirmed event."
     )
     if benchmark is not None:
         st.caption(

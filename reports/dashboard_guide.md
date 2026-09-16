@@ -3,7 +3,7 @@
 Every visual element in `app/streamlit_app.py`, tab by tab, top to bottom. Companion
 to the shorter "Reading the dashboard" section in the README.
 
-- Time-series charts use **Europe/Berlin** on the x-axis — the timezone demand actually follows, so the daily shape reads correctly. Hour-of-day bar charts use Berlin local time too. Everything is stored and computed in UTC; the conversion is for display only.
+- Time-series charts use **Europe/Berlin** on the x-axis — the timezone demand actually follows, so the daily shape reads correctly. Everything is stored and computed in UTC; the conversion is for display only. (The anomaly explorer is the one exception and still labels its axis UTC.)
 - The forecast model is `HistGradientBoostingForecast` (referred to below as HGB / the GBM).
 - Intervals and anomaly bounds are **empirical residual magnitudes**, not calibrated probabilities.
 
@@ -21,7 +21,7 @@ Three metric cards:
 
 ## Tab 1 — Forecast
 
-**Chart: "Next 24 hours"** — x = time (UTC), y = demand (MW).
+**Chart: "Next 24 hours"** — x = time (Europe/Berlin), y = demand (MW).
 
 | Element | What it is |
 |---|---|
@@ -76,11 +76,34 @@ shows the most recent origin's value per hour, while the table scores every orig
 
 Two sections.
 
-### A. Rolling-origin backtest
+### A. Model health
+
+From the history `scripts/benchmark.py` retains (`reports/history/benchmark_runs.csv`,
+`reports/history/origin_scores.csv`). This section answers "is the model worse than it used to
+be?" — a different question from "is it good?", which section B answers.
+
+- **Verdict badge** — `ok` / `watch` / `regressed` / `unknown` for the trailing 14 origins, scored
+  as a percentile of season-matched days (±21 days by day-of-year, widened only until enough
+  origins are in reach). A single bad window is never worse than `watch`; `regressed` requires two
+  consecutive runs.
+- **Trailing 14-origin MAE** — mean 24-hour MAE over the most recent scored origins, against the
+  median of its seasonal reference. Lower is better, so the delta arrow is colour-inverted.
+- **Interval coverage** — mean per-origin coverage in the latest run, judged against the coverage
+  this model has established (≈93%), *not* the 95% nominal label, which the band under-covers by
+  design.
+- **Chart: champion error against its own season** — every retained per-origin MAE as a faint
+  marker, its 14-origin trailing mean as a line, the season-matched reference IQR as a horizontal
+  band, and the window being judged as a tinted column.
+
+If no run history exists yet, the panel falls back to a provisional verdict computed from the
+replayed week, capped at `watch` because seven origins is too few to condemn a model.
+
+### B. Rolling-origin backtest
 
 From `scripts/benchmark.py` artifacts (`reports/benchmark_summary.json`, `reports/benchmark_metrics.csv`).
 ~329 daily origins over the whole snapshot; every model refit at every origin; no random split.
-If the artifacts are missing, this section is replaced by an info box and only section B shows.
+If the artifacts are missing, this section is replaced by an info box naming the command that
+builds them.
 
 1. **Caption line** — origin count, spacing (24 h), total forecast hours, date range.
 2. **Metrics table** — one row per model (Seasonal naive, SARIMAX, HistGradientBoosting):
@@ -100,15 +123,6 @@ If the artifacts are missing, this section is replaced by an info box and only s
      (typically the 24 h and 168 h demand lags and the trailing means).
    - **Right — "Where HistGradientBoosting errs":** the champion's MAE broken down by slice
      (hour, weekday, month, holiday) over the full backtest — shows *when* errors concentrate.
-
-### B. Trailing-week holdout
-
-Computed live on every page load — the fast honesty check.
-
-6. **Small table** — Seasonal naive vs HistGradientBoosting on the last 7 days: mae, rmse, smape.
-7. **Bar chart (left): MAE by hour** — HGB's mean absolute error for each hour of day (Berlin local).
-   Surfaces the hardest hours (usually the morning ramp and evening peak).
-8. **Bar chart (right): MAE by weekday** — same error grouped Mon–Sun. Weekend vs workday usually differ.
 
 
 ## Tab 4 — Anomalies
@@ -141,8 +155,8 @@ The classification track (`src/energy_forecast/events.py`), a daily binary targe
   a 30% forecast says something different when the base rate is 12% than when it is 30%.
 - **Classification backtest tables** from `reports/classification_summary.json` — PR-AUC, ROC-AUC and
   lift over the base rate for both targets (high-demand day, anomaly day), against a majority-class
-  floor and a calendar-only logistic baseline.
-- **Precision-recall curves** — `reports/figures/classification_pr_*.png`.
+  floor and a calendar-only logistic baseline. The precision-recall curves themselves are not
+  rendered in the app; they live in `reports/classification.md`.
 
 If there are fewer than 60 labelled days, or the training window contains only one class, the panel
 says so instead of scoring.
@@ -158,6 +172,11 @@ No charts — reference text.
 - **Method** — five bullets: the three model levels; leakage-safe features (every lag/rolling window
   shifted before aggregation); chronological rolling-origin evaluation (never a random split);
   the honest seasonal-naive baseline; empirical residual-based intervals and anomalies.
+- **How to read these charts** — the caveats that used to sit under each chart as a paragraph:
+  what the forecast band is and is not, why unpublished hours appear as gaps and are excluded
+  rather than imputed, the replay-versus-published-log distinction, why a score can shift after
+  the fact, the season-matching and percentile rules behind Model health, and what an anomaly
+  flag does and does not claim.
 
 
 ## Where the numbers come from
@@ -166,7 +185,7 @@ No charts — reference text.
 |---|---|
 | Forecast line + interval band | `ForecastService.forecast()` → `forecast_with_interval()` |
 | Rolling-origin table, MAE-by-origin line, the two PNGs | `scripts/benchmark.py` → `reports/benchmark_*` |
-| Trailing-week table + hour/weekday bars | `model_comparison()` and `error_slices()` in the app, live |
+| Model-health verdict, metrics and champion chart | `drift.py` over `reports/history/*.csv`, retained by `scripts/benchmark.py` |
 | Seven-day replay chart + per-day table | `ForecastService.hindcast()` → `verification.hindcast()`, `daily_scores()` |
 | Published-forecast chart + table | `data/forecasts/forecast_log.csv`, written by `scripts/log_forecast.py` (daily via `.github/workflows/log-forecast.yml`) |
 | Anomaly chart + flagged table | `ForecastService.detect_recent_anomalies()` → `detect_anomalies()` |
