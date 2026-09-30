@@ -536,7 +536,7 @@ def assess(
     percentile = float((reference.mae.to_numpy(dtype=float) < window_mae).mean())
     shared = (
         f"Over the last {n_window} days the model's average error was higher than "
-        f"{round(percentile * 100)}% of {n_reference} similar days from previous years "
+        f"{round(percentile * 100)}% of {n_reference} similar days at the same time of year "
         f"(days falling within {reference_window_days} days of the same date)"
     )
 

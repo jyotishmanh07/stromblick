@@ -563,8 +563,8 @@ with quality_tab:
             # Lower error is better, so a positive delta must not read as good news.
             delta_color="inverse",
             help=f"How far off the forecast was on average over the {verdict.window_origins} "
-            "most recent days scored, next to the typical miss on similar days from "
-            "previous years.",
+            "most recent days scored, next to the typical miss on similar days at the "
+            "same time of year.",
         )
 
         coverage_help = (
