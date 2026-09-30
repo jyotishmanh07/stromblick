@@ -69,8 +69,11 @@ jobs:
             data/clean/metadata.json
           retention-days: 14
 
+      # Never compare `inputs` to a boolean literal here. On a schedule event `inputs` is
+      # empty, and GitHub's loose equality coerces null and false both to 0, so the old
+      # `inputs.commit != false` was false on every scheduled run and this step was skipped.
       - name: Commit refreshed snapshot
-        if: ${{ inputs.commit != false }}
+        if: ${{ github.event_name == 'schedule' || inputs.commit }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -84,3 +87,20 @@ jobs:
             git pull --rebase
             git push
           fi
+
+      # Watchdog for the unattended path. Its condition is deliberately independent of the
+      # commit step's, so a skipped commit still turns the run red instead of leaving it
+      # green with nothing landed. It reads origin/main rather than the working tree, so it
+      # proves the snapshot reached main, and it also catches SMARD not advancing upstream.
+      - name: Verify the refreshed snapshot reached main
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          git fetch origin main
+          last() {
+            git show "$1:data/clean/metadata.json" \
+              | python -c "import json, sys; print(json.load(sys.stdin)['last_timestamp'])"
+          }
+          before=$(last ${{ github.sha }})
+          after=$(last origin/main)
+          echo "last_timestamp on main: $before -> $after"
+          [[ "$after" > "$before" ]] || { echo "::error::Snapshot on main did not advance"; exit 1; }
