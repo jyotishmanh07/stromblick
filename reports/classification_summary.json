@@ -2,71 +2,71 @@
   "high_demand": {
     "label": "High-demand day",
     "champion": "HistGradientBoosting",
-    "scored_days": 199,
-    "labelled_days": 319,
+    "scored_days": 202,
+    "labelled_days": 322,
     "models": {
       "HistGradientBoosting": {
-        "pr_auc": 0.5982,
-        "pr_auc_lift": 3.052,
-        "roc_auc": 0.821,
-        "brier": 0.1385,
-        "base_rate": 0.196
+        "pr_auc": 0.5549,
+        "pr_auc_lift": 2.076,
+        "roc_auc": 0.8032,
+        "brier": 0.1807,
+        "base_rate": 0.2673
       },
       "Calendar logistic": {
-        "pr_auc": 0.2478,
-        "pr_auc_lift": 1.265,
-        "roc_auc": 0.6603,
-        "brier": 0.2424,
-        "base_rate": 0.196
+        "pr_auc": 0.3979,
+        "pr_auc_lift": 1.489,
+        "roc_auc": 0.7171,
+        "brier": 0.2074,
+        "base_rate": 0.2673
       },
       "Majority class": {
-        "pr_auc": 0.1477,
-        "pr_auc_lift": 0.754,
-        "roc_auc": 0.3578,
-        "brier": 0.1844,
-        "base_rate": 0.196
+        "pr_auc": 0.2315,
+        "pr_auc_lift": 0.866,
+        "roc_auc": 0.4278,
+        "brier": 0.1989,
+        "base_rate": 0.2673
       }
     },
     "operating_point": {
-      "threshold": 0.05,
-      "precision": 0.3261,
-      "recall": 0.7692,
-      "flagged": 92
+      "threshold": 0.1,
+      "precision": 0.4778,
+      "recall": 0.7963,
+      "flagged": 90
     }
   },
   "anomaly": {
     "label": "Anomaly day",
     "champion": "HistGradientBoosting",
-    "scored_days": 198,
-    "labelled_days": 318,
+    "scored_days": 201,
+    "labelled_days": 321,
     "models": {
       "HistGradientBoosting": {
-        "pr_auc": 0.7187,
-        "pr_auc_lift": 7.906,
-        "roc_auc": 0.9062,
-        "brier": 0.0491,
-        "base_rate": 0.0909
+        "pr_auc": 0.7231,
+        "pr_auc_lift": 7.649,
+        "roc_auc": 0.9303,
+        "brier": 0.0496,
+        "base_rate": 0.0945
       },
       "Calendar logistic": {
-        "pr_auc": 0.7156,
-        "pr_auc_lift": 7.871,
-        "roc_auc": 0.9281,
-        "brier": 0.114,
-        "base_rate": 0.0909
+        "pr_auc": 0.6212,
+        "pr_auc_lift": 6.571,
+        "roc_auc": 0.9199,
+        "brier": 0.0981,
+        "base_rate": 0.0945
       },
       "Majority class": {
-        "pr_auc": 0.0847,
-        "pr_auc_lift": 0.932,
-        "roc_auc": 0.4745,
-        "brier": 0.0838,
-        "base_rate": 0.0909
+        "pr_auc": 0.0856,
+        "pr_auc_lift": 0.905,
+        "roc_auc": 0.4419,
+        "brier": 0.0866,
+        "base_rate": 0.0945
       }
     },
     "operating_point": {
-      "threshold": 0.15,
-      "precision": 0.6364,
-      "recall": 0.7778,
-      "flagged": 22
+      "threshold": 0.05,
+      "precision": 0.4848,
+      "recall": 0.8421,
+      "flagged": 33
     }
   }
 }

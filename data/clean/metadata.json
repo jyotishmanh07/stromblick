@@ -2,10 +2,6 @@
   "source": "Bundesnetzagentur | SMARD.de",
   "source_url": "https://www.smard.de/app/chart_data/410/DE/index_hour.json",
   "chunk_urls": [
-    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1757282400000.json",
-    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1757887200000.json",
-    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1758492000000.json",
-    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1759096800000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1759701600000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1760306400000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1760911200000.json",
@@ -53,13 +49,92 @@
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1786312800000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1786917600000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1787522400000.json",
-    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1788127200000.json"
+    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1788127200000.json",
+    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1788732000000.json",
+    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1789336800000.json",
+    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1789941600000.json",
+    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1790546400000.json"
   ],
   "module_id": 410,
   "region": "DE",
   "resolution": "hour",
-  "collected_at": "2026-08-31T09:35:50.549967+00:00",
-  "rows": 8578,
-  "first_timestamp": "2025-09-07T22:00:00+00:00",
-  "last_timestamp": "2026-08-31T07:00:00+00:00"
+  "collected_at": "2026-09-30T18:17:34.944135+00:00",
+  "rows": 8635,
+  "first_timestamp": "2025-10-05T22:00:00+00:00",
+  "last_timestamp": "2026-09-30T16:00:00+00:00",
+  "quality": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "schema",
+        "passed": true,
+        "severity": "error",
+        "detail": "timestamp and demand_mw present",
+        "value": null
+      },
+      {
+        "name": "non_empty",
+        "passed": true,
+        "severity": "error",
+        "detail": "8,635 rows",
+        "value": 8635
+      },
+      {
+        "name": "timezone_aware_utc",
+        "passed": true,
+        "severity": "error",
+        "detail": "timestamps must be tz-aware UTC before they cross a module boundary",
+        "value": null
+      },
+      {
+        "name": "chronological",
+        "passed": true,
+        "severity": "error",
+        "detail": "timestamps must be sorted ascending",
+        "value": null
+      },
+      {
+        "name": "unique_timestamps",
+        "passed": true,
+        "severity": "error",
+        "detail": "no duplicates",
+        "value": 0
+      },
+      {
+        "name": "has_observations",
+        "passed": true,
+        "severity": "error",
+        "detail": "8,635 observed hours",
+        "value": 8635
+      },
+      {
+        "name": "plausible_range",
+        "passed": true,
+        "severity": "error",
+        "detail": "0 value(s) outside 20,000-100,000 MW (observed 32,598-78,241)",
+        "value": 0
+      },
+      {
+        "name": "positive_demand",
+        "passed": true,
+        "severity": "error",
+        "detail": "0 non-positive value(s)",
+        "value": 0
+      },
+      {
+        "name": "nan_fraction",
+        "passed": true,
+        "severity": "warning",
+        "detail": "0.00% of hours indexed but unpublished (limit 5%)",
+        "value": 0.0
+      },
+      {
+        "name": "hourly_continuity",
+        "passed": true,
+        "severity": "warning",
+        "detail": "0 missing hourly timestamp(s), 0.00% of the expected index (limit 2%); gaps are reported, never imputed",
+        "value": 0
+      }
+    ]
+  }
 }
