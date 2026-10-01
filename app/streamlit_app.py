@@ -72,8 +72,12 @@ def record_figure(
     """Band, actuals and forecast over a local-time axis — the Track record chart grammar.
 
     `plot` needs `timestamp` and `local` columns plus demand_mw/prediction/lower_bound/
-    upper_bound. Trace order matters: the two invisible bound traces come first so
-    `fill="tonexty"` paints the band *behind* the lines rather than over them.
+    upper_bound. Trace order matters: the band traces come first so they paint *behind*
+    the lines rather than over them.
+
+    The band is one closed polygon per contiguous run of bounds, not a single
+    `fill="tonexty"` pair: tonexty fills straight across NaN gaps, so the published log
+    (which has hours no origin covered) would draw diagonal wedges through every hole.
 
     `shade_until` bounds the missing-data shading at the last published hour. Without it a
     forecast for hours that simply have not happened yet reads as a reporting gap, and the
@@ -81,19 +85,18 @@ def record_figure(
     would shade solid grey. Absent demand after that instant is the future, not a hole.
     """
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=plot.local, y=plot.upper_bound,
-            line=dict(width=0), hoverinfo="skip", showlegend=False,
+    has_band = plot.upper_bound.notna() & plot.lower_bound.notna()
+    runs = (has_band != has_band.shift()).cumsum()[has_band]
+    for i, (_, run) in enumerate(plot[has_band].groupby(runs)):
+        fig.add_trace(
+            go.Scatter(
+                x=pd.concat([run.local, run.local[::-1]]),
+                y=pd.concat([run.upper_bound, run.lower_bound[::-1]]),
+                name="Prediction interval", fill="toself", fillcolor=INTERVAL_FILL,
+                line=dict(width=0), hoverinfo="skip",
+                legendgroup="band", showlegend=i == 0,
+            )
         )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=plot.local, y=plot.lower_bound,
-            name="Prediction interval", fill="tonexty", fillcolor=INTERVAL_FILL,
-            line=dict(width=0), hoverinfo="skip",
-        )
-    )
     fig.add_trace(
         go.Scatter(
             x=plot.local, y=plot.demand_mw, name="Observed",
@@ -651,8 +654,8 @@ with quality_tab:
         st.plotly_chart(health_fig, width="stretch")
         st.caption(
             "Each dot is one day's average error; the line smooths it over "
-            f"{drift.RECENT_ORIGINS} days. The grey band is where similar days from previous "
-            "years usually land, and the tinted column is the stretch being judged above."
+            f"{drift.RECENT_ORIGINS} days. The shaded band is where similar days at the same "
+            "time of year usually land, and the tinted column is the stretch being judged above."
         )
 
     st.divider()
@@ -701,11 +704,18 @@ with quality_tab:
         if tests:
             closest = max(tests["comparisons"].values(), key=lambda s: s["mean_diff"])
             cov_test = tests["coverage"]
+            # The summary stores p rounded to 4 places, so a tiny p arrives as exactly 0.
+            p = closest["wilcoxon_p"]
+            p_text = "p < 0.0001" if p < 1e-4 else f"p = {p:.4f}"
+            verdict = (
+                "The gap is not sampling noise." if closest["ci_upper"] < 0
+                else "The interval includes zero, so the gap may be sampling noise."
+            )
             st.markdown(
-                f"Paired bootstrap over {closest['n']} origins puts that advantage at "
+                f"Paired bootstrap over {int(closest['n'])} origins puts that advantage at "
                 f"**[{-closest['ci_upper']:,.0f}, {-closest['ci_lower']:,.0f}] MW** against the "
-                f"closest rival (Wilcoxon p = {closest['wilcoxon_p']:.1e}). The gap is not "
-                "sampling noise. Mean per-origin interval coverage is "
+                f"closest rival (Wilcoxon {p_text}). {verdict} "
+                "Mean per-origin interval coverage is "
                 f"{100 * cov_test['mean_coverage']:.1f}% "
                 f"(95% CI [{100 * cov_test['ci_lower']:.1f}%, {100 * cov_test['ci_upper']:.1f}%]) "
                 f"against the {100 * cov_test['nominal']:.0f}% target."
@@ -756,18 +766,20 @@ with anomaly_tab:
         st.info("Not enough history to score this window; showing observed demand only.")
         st.line_chart(history.tail(label_to_hours[choice]).set_index("timestamp")["demand_mw"])
     else:
+        # Plot in Berlin time like every other tab, so a flagged 09:00 reads as 09:00.
+        anomalies = anomalies.assign(local=anomalies.timestamp.dt.tz_convert(BERLIN))
         flagged = anomalies[anomalies.is_anomaly]
         anomaly_fig = go.Figure()
         anomaly_fig.add_trace(
             go.Scatter(
-                x=anomalies.timestamp,
+                x=anomalies.local,
                 y=anomalies.expected_demand_mw + anomalies.upper_residual_bound,
                 line=dict(width=0), hoverinfo="skip", showlegend=False,
             )
         )
         anomaly_fig.add_trace(
             go.Scatter(
-                x=anomalies.timestamp,
+                x=anomalies.local,
                 y=anomalies.expected_demand_mw + anomalies.lower_residual_bound,
                 name="Expected ± residual bounds", fill="tonexty", fillcolor=INTERVAL_FILL,
                 line=dict(width=0), hoverinfo="skip",
@@ -775,25 +787,25 @@ with anomaly_tab:
         )
         anomaly_fig.add_trace(
             go.Scatter(
-                x=anomalies.timestamp, y=anomalies.expected_demand_mw, name="Expected",
+                x=anomalies.local, y=anomalies.expected_demand_mw, name="Expected",
                 line=dict(color=EXPECTED, width=2, dash="dash"),
             )
         )
         anomaly_fig.add_trace(
             go.Scatter(
-                x=anomalies.timestamp, y=anomalies.demand_mw, name="Observed",
+                x=anomalies.local, y=anomalies.demand_mw, name="Observed",
                 line=dict(color=OBSERVED, width=2),
             )
         )
         if not flagged.empty:
             anomaly_fig.add_trace(
                 go.Scatter(
-                    x=flagged.timestamp, y=flagged.demand_mw, name="Anomaly", mode="markers",
+                    x=flagged.local, y=flagged.demand_mw, name="Anomaly", mode="markers",
                     marker=dict(symbol="x", size=11, color=ANOMALY),
                 )
             )
         anomaly_fig.update_layout(
-            **plotly_layout(yaxis_title="Demand (MW)", xaxis_title="Time (UTC)")
+            **plotly_layout(yaxis_title="Demand (MW)", xaxis_title="Time (Europe/Berlin)")
         )
         st.plotly_chart(anomaly_fig, width="stretch")
         if flagged.empty:
@@ -803,7 +815,14 @@ with anomaly_tab:
                 f"{len(flagged)} of {len(anomalies)} hours flagged (99% residual bounds)."
             )
             st.dataframe(
-                flagged[["timestamp", "demand_mw", "expected_demand_mw", "deviation_mw"]].round(1),
+                pd.DataFrame(
+                    {
+                        "Hour (Berlin)": flagged.local.dt.strftime("%a %d %b %H:%M"),
+                        "Observed (MW)": flagged.demand_mw.map("{:,.0f}".format),
+                        "Expected (MW)": flagged.expected_demand_mw.map("{:,.0f}".format),
+                        "Deviation (MW)": flagged.deviation_mw.map("{:+,.0f}".format),
+                    }
+                ),
                 hide_index=True, width="stretch",
             )
 
@@ -857,11 +876,28 @@ with event_tab:
                 ]
             )
             st.dataframe(table, hide_index=True, width="stretch")
+        # The calendar-baseline reading depends on the snapshot: it nearly tied the GBM on
+        # the August data and fell well behind on September's, so it is computed, not stated.
+        anomaly = classification.get("anomaly", {}).get("models", {})
+        gbm, cal = (anomaly.get(k, {}).get("pr_auc") for k in ("HistGradientBoosting",
+                                                                "Calendar logistic"))
+        if gbm is None or cal is None:
+            calendar_note = ""
+        elif gbm - cal <= 0.02:
+            calendar_note = (
+                f" On the anomaly target the calendar-only baseline nearly matches the "
+                f"gradient-boosted model (PR-AUC {cal:.3f} vs {gbm:.3f}), which says those "
+                "days are mostly a calendar phenomenon (holidays and DST)."
+            )
+        else:
+            calendar_note = (
+                f" On the anomaly target the gradient-boosted model beats the calendar-only "
+                f"baseline (PR-AUC {gbm:.3f} vs {cal:.3f}), so those days carry demand "
+                "signal beyond holidays and DST."
+            )
         st.caption(
             "PR-AUC is read against the base rate, not against 0.5. The lift column is the "
-            "honest version. On the anomaly target the calendar-only baseline nearly matches "
-            "the gradient-boosted model, which says those days are mostly a calendar "
-            "phenomenon (holidays and DST) rather than a demand-dynamics one."
+            f"honest version.{calendar_note}"
         )
 
 

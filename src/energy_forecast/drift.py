@@ -525,8 +525,9 @@ def assess(
     if n_reference < min_reference or n_window < 2:
         return verdict(
             "unknown",
-            f"Not enough past data yet to judge. Only {n_reference} similar days from previous "
-            f"years are available to compare against, and at least {min_reference} are needed.",
+            f"Not enough past data yet to judge. Only {n_reference} similar days at the same "
+            f"time of year are available to compare against, and at least {min_reference} "
+            "are needed.",
             f"{n_reference} similar days (need {min_reference}), and {n_window} day"
             f"{'' if n_window == 1 else 's'} of recent error to score (need at least 2). "
             "A verdict from this little data would be noise.",
