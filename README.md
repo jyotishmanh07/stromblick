@@ -20,7 +20,7 @@ The target is hourly demand in MW. Statistical anomalies are investigation promp
 
 ## Dashboard
 
-![Stromblick dashboard: live metrics and the next-24-hour forecast](reports/figures/dashboard.png)
+![Stromblick dashboard: live metrics and the next-24-hour forecast](reports/figures/dashboard_forecast.png)
 
 *The forecast tab on live SMARD data: the last three days observed, then the 24-hour forecast with its residual band.*
 
