@@ -18,6 +18,36 @@ Given all demand observed up to a timestamp, what demand should we expect during
 
 The target is hourly demand in MW. Statistical anomalies are investigation prompts, not confirmed events or causal explanations.
 
+## Dashboard
+
+![Stromblick dashboard: live metrics and the next-24-hour forecast](reports/figures/dashboard.png)
+
+*The forecast tab on live SMARD data: the last three days observed, then the 24-hour forecast with its residual band.*
+
+![Track record: seven daily forecasts replayed against what happened](reports/figures/dashboard_track_record.png)
+
+*Track record: the last seven daily forecasts, each refit only on data available at its origin, scored against actuals.*
+
+![Model health: drift verdict, recent error against the same time of year, and interval coverage](reports/figures/dashboard_model_health.png)
+
+*Model health: recent error ranked against the same time of year, plus interval coverage against its established baseline.*
+
+### Reading the dashboard
+
+A header metrics row sits above six tabs: latest observed demand, data freshness (hours since the most recent published SMARD observation), and the data source ("SMARD live API" when the live fetch succeeded, "SMARD clean export" when it fell back to the committed snapshot, the deterministic demo series otherwise).
+
+**Forecast** — the last three days of observed demand (dark line) then the 24-hour forecast (blue), with a dotted marker at the forecast start. The shaded band is the forecast ± the 95th percentile of absolute residuals the model made on a held-out validation week, so its width reflects how wrong the model has recently been, not a probabilistic guarantee. Gaps in the observed line are hours SMARD has indexed but not yet published.
+
+**Track record** — the last seven daily forecasts against what actually happened, with per-day MAE and interval coverage. The upper chart is the *replay*: each day refit on data dated at or before that day's origin, so no future value reaches it, but computed now. The lower chart is the *log*: the forecasts the daily workflow committed to git at the moment it issued them, joined to actuals as SMARD publishes them. The replay is available immediately and the log accrues one day at a time; the tab says which is which rather than blurring them, because only the log rules out hindsight.
+
+**Model quality** — opens with **Model health**: a verdict (`ok` / `watch` / `regressed` / `unknown`) for the trailing 14 origins against comparable days at the same time of year, the champion's per-origin error over time with its seasonal reference band, and an interval-coverage metric judged against its established baseline rather than the 95% label. Below that, the full rolling-origin backtest from `reports/benchmark.md`: the three-model headline table, per-origin MAE for each model, prediction-interval coverage, permutation importance, and the champion's error slices. The message is the one the project turns on: the main model has to beat "same hour yesterday" to justify its complexity.
+
+**Anomalies** — observed demand against what the model expected for each hour (dashed), over a selectable 7/14/28-day window. The band is the expected value ± the 1st/99th percentile of validation residuals, learned from the week *before* the window so the bounds never see the data they score. Hours whose deviation leaves the band get a red ✕ and a table row with observed, expected, and deviation in MW. These are statistical flags — prompts to investigate weather, calendar, or grid events — not confirmed anomalies.
+
+**Event risk** — the classification track. Tomorrow's probability of being a high-demand day, shown beside the recent base rate (a 30% forecast means something different when the base rate is 12% than when it is 30%), plus the chronological backtest of both event targets, scored by PR-AUC and lift over the base rate. The precision-recall curves live in [reports/classification.md](reports/classification.md).
+
+**Data & methods** — the provenance of the exact SMARD snapshot in use (collection time, row count, time range, weekly-chunk count) from `data/clean/metadata.json`, the result of the ingest-time data-quality gate, plus a summary of the method (leakage-safe features, chronological evaluation, tested claims, the honest baseline, the SQL reporting layer) and a **How to read these charts** section carrying the standing caveats about intervals, unpublished hours, anomalies, and the drift rules behind Model health.
+
 ## Method
 
 The repository compares exactly three model levels:
@@ -152,36 +182,6 @@ Three tables: `fact_demand` (hourly observations), `dim_calendar` (local hour, w
 Queries live in [sql/](sql/) — daily profile by day type, weekly and monthly patterns, holiday-vs-ordinary demand, missing-hour reporting, error slices, and the headline model summary. `scripts/generate_eda.py` runs them to build the EDA report; [tests/test_warehouse.py](tests/test_warehouse.py) asserts each matches its pandas equivalent, so the SQL is verified rather than decorative.
 
 Ingestion is deliberately *not* routed through the warehouse: `canonicalize_demand()` stays the single funnel every source passes through. The warehouse is derived, gitignored, and rebuilt on demand.
-
-## Dashboard
-
-![Stromblick dashboard: live metrics and the next-24-hour forecast](reports/figures/dashboard.png)
-
-*The forecast tab on live SMARD data: the last three days observed, then the 24-hour forecast with its residual band.*
-
-![Track record: seven daily forecasts replayed against what happened](reports/figures/dashboard_track_record.png)
-
-*Track record: the last seven daily forecasts, each refit only on data available at its origin, scored against actuals.*
-
-![Model health: drift verdict, recent error against the same time of year, and interval coverage](reports/figures/dashboard_model_health.png)
-
-*Model health: recent error ranked against the same time of year, plus interval coverage against its established baseline.*
-
-### Reading the dashboard
-
-A header metrics row sits above six tabs: latest observed demand, data freshness (hours since the most recent published SMARD observation), and the data source ("SMARD live API" when the live fetch succeeded, "SMARD clean export" when it fell back to the committed snapshot, the deterministic demo series otherwise).
-
-**Forecast** — the last three days of observed demand (dark line) then the 24-hour forecast (blue), with a dotted marker at the forecast start. The shaded band is the forecast ± the 95th percentile of absolute residuals the model made on a held-out validation week, so its width reflects how wrong the model has recently been, not a probabilistic guarantee. Gaps in the observed line are hours SMARD has indexed but not yet published.
-
-**Track record** — the last seven daily forecasts against what actually happened, with per-day MAE and interval coverage. The upper chart is the *replay*: each day refit on data dated at or before that day's origin, so no future value reaches it, but computed now. The lower chart is the *log*: the forecasts the daily workflow committed to git at the moment it issued them, joined to actuals as SMARD publishes them. The replay is available immediately and the log accrues one day at a time; the tab says which is which rather than blurring them, because only the log rules out hindsight.
-
-**Model quality** — opens with **Model health**: a verdict (`ok` / `watch` / `regressed` / `unknown`) for the trailing 14 origins against comparable days at the same time of year, the champion's per-origin error over time with its seasonal reference band, and an interval-coverage metric judged against its established baseline rather than the 95% label. Below that, the full rolling-origin backtest from `reports/benchmark.md`: the three-model headline table, per-origin MAE for each model, prediction-interval coverage, permutation importance, and the champion's error slices. The message is the one the project turns on: the main model has to beat "same hour yesterday" to justify its complexity.
-
-**Anomalies** — observed demand against what the model expected for each hour (dashed), over a selectable 7/14/28-day window. The band is the expected value ± the 1st/99th percentile of validation residuals, learned from the week *before* the window so the bounds never see the data they score. Hours whose deviation leaves the band get a red ✕ and a table row with observed, expected, and deviation in MW. These are statistical flags — prompts to investigate weather, calendar, or grid events — not confirmed anomalies.
-
-**Event risk** — the classification track. Tomorrow's probability of being a high-demand day, shown beside the recent base rate (a 30% forecast means something different when the base rate is 12% than when it is 30%), plus the chronological backtest of both event targets, scored by PR-AUC and lift over the base rate. The precision-recall curves live in [reports/classification.md](reports/classification.md).
-
-**Data & methods** — the provenance of the exact SMARD snapshot in use (collection time, row count, time range, weekly-chunk count) from `data/clean/metadata.json`, the result of the ingest-time data-quality gate, plus a summary of the method (leakage-safe features, chronological evaluation, tested claims, the honest baseline, the SQL reporting layer) and a **How to read these charts** section carrying the standing caveats about intervals, unpublished hours, anomalies, and the drift rules behind Model health.
 
 ## Run locally
 
