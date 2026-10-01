@@ -20,6 +20,7 @@ import pandas as pd
 
 matplotlib.use("Agg")  # report script: never open a GUI window
 import matplotlib.pyplot as plt  # noqa: E402
+from readme_blocks import sync_readme_block
 
 from energy_forecast.data import load_clean_demand
 from energy_forecast.events import (
@@ -40,6 +41,53 @@ FIG_DIR = Path("reports/figures")
 REPORT_PATH = Path("reports/classification.md")
 METRICS_PATH = Path("reports/classification_metrics.csv")
 SUMMARY_PATH = Path("reports/classification_summary.json")
+
+
+# Spelled-out label rules for the README table, keyed like the summary JSON.
+TARGET_NOTES = {
+    "high_demand": "peak in the trailing month's top 30%",
+    "anomaly": "an hour departing from seasonal-naive",
+}
+
+
+def readme_classification(summary: dict) -> list[str]:
+    """The README's classification table and calendar-baseline reading, from the summary.
+
+    The calendar reading is computed because it flips with the snapshot: the calendar-only
+    baseline nearly tied the GBM on the anomaly target in August and fell well behind in
+    September. A sentence stating either outcome would be wrong half the time.
+    """
+    lines = [
+        "| Target | Champion | PR-AUC | Lift over base rate | ROC-AUC |",
+        "|---|---|---|---|---|",
+    ]
+    for key, block in summary.items():
+        best = block["models"][block["champion"]]
+        note = TARGET_NOTES.get(key)
+        target = f"{block['label']} ({note})" if note else block["label"]
+        lines.append(
+            f"| {target} | {block['champion']} | {best['pr_auc']:.3f} | "
+            f"{best['pr_auc_lift']:.2f}× | {best['roc_auc']:.3f} |"
+        )
+    anomaly = summary.get("anomaly", {}).get("models", {})
+    gbm = anomaly.get("HistGradientBoosting", {}).get("pr_auc")
+    cal = anomaly.get("Calendar logistic", {}).get("pr_auc")
+    if gbm is not None and cal is not None:
+        lines.append("")
+        if gbm - cal <= 0.02:
+            lines.append(
+                f"On the **anomaly** target the calendar-only baseline nearly matches the "
+                f"gradient-boosted model (PR-AUC {cal:.3f} vs {gbm:.3f}), which says those days "
+                "are mostly a calendar phenomenon (holidays and DST) on this snapshot."
+            )
+        else:
+            lines.append(
+                f"On the **anomaly** target the gradient-boosted model beats the calendar-only "
+                f"baseline (PR-AUC {gbm:.3f} vs {cal:.3f}), so those days carry demand signal "
+                "beyond holidays and DST on this snapshot. On the August 2026 snapshot the two "
+                "nearly tied, which is why this reading is recomputed rather than written down."
+            )
+    return lines
 
 MODEL_FACTORIES = {
     "Majority class": MajorityClassBaseline,
@@ -301,39 +349,37 @@ def main() -> None:
     ]
     REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
 
-    SUMMARY_PATH.write_text(
-        json.dumps(
-            {
-                result["key"]: {
-                    "label": result["label"],
-                    "champion": result["champion"],
-                    "scored_days": int(result["backtest"].date.nunique()),
-                    "labelled_days": int(len(result["daily"])),
-                    "models": {
-                        row.model: {
-                            "pr_auc": round(float(row.pr_auc), 4),
-                            "pr_auc_lift": round(float(row.pr_auc_lift), 3),
-                            "roc_auc": round(float(row.roc_auc), 4),
-                            "brier": round(float(row.brier), 4),
-                            "base_rate": round(float(row.base_rate), 4),
-                        }
-                        for row in result["table"].itertuples()
-                    },
-                    "operating_point": {
-                        "threshold": round(float(result["best_threshold"].threshold), 2),
-                        "precision": round(float(result["best_threshold"].precision), 4),
-                        "recall": round(float(result["best_threshold"].recall), 4),
-                        "flagged": int(result["best_threshold"].flagged),
-                    },
+    summary = {
+        result["key"]: {
+            "label": result["label"],
+            "champion": result["champion"],
+            "scored_days": int(result["backtest"].date.nunique()),
+            "labelled_days": int(len(result["daily"])),
+            "models": {
+                row.model: {
+                    "pr_auc": round(float(row.pr_auc), 4),
+                    "pr_auc_lift": round(float(row.pr_auc_lift), 3),
+                    "roc_auc": round(float(row.roc_auc), 4),
+                    "brier": round(float(row.brier), 4),
+                    "base_rate": round(float(row.base_rate), 4),
                 }
-                for result in results
+                for row in result["table"].itertuples()
             },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+            "operating_point": {
+                "threshold": round(float(result["best_threshold"].threshold), 2),
+                "precision": round(float(result["best_threshold"].precision), 4),
+                "recall": round(float(result["best_threshold"].recall), 4),
+                "flagged": int(result["best_threshold"].flagged),
+            },
+        }
+        for result in results
+    }
+    SUMMARY_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    synced = sync_readme_block("CLASSIFICATION", readme_classification(summary))
 
     print(f"Wrote {REPORT_PATH}, {METRICS_PATH}, {SUMMARY_PATH}, and 4 figures to {FIG_DIR}/")
+    status = "rewritten" if synced else "NOT found (markers missing)"
+    print(f"README classification block: {status}")
     for result in results:
         print(f"\n{result['label']} (champion: {result['champion']})")
         print(result["table"].to_string(index=False, float_format=lambda v: f"{v:.4f}"))

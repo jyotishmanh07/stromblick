@@ -18,6 +18,7 @@ import pandas as pd
 
 matplotlib.use("Agg")  # report script: never open a GUI window
 import matplotlib.pyplot as plt  # noqa: E402
+from readme_blocks import p_text, sync_readme_block
 
 from energy_forecast import drift
 from energy_forecast.data import load_clean_demand
@@ -45,9 +46,6 @@ HOURLY_PATH = Path("reports/benchmark_champion_hourly.csv")
 POOLED_PATH = Path("reports/benchmark_pooled_hourly.csv")
 SUMMARY_PATH = Path("reports/benchmark_summary.json")
 TUNING_SUMMARY_PATH = Path("reports/tuning_summary.json")
-README_PATH = Path("README.md")
-RESULTS_START = "<!-- RESULTS-TABLE:START"
-RESULTS_END = "<!-- RESULTS-TABLE:END -->"
 
 # The generation label the forecast log also records (models.py:162 returns it on every
 # ForecastOutput). Bump it there and here together, or the run history and the forecast log
@@ -299,18 +297,71 @@ def tuning_section() -> list[str]:
     ]
 
 
+def _stat(key: str, value: float) -> float:
+    """Round a test statistic for the summary JSON.
+
+    p-values keep three significant figures instead of four decimal places: rounding a
+    p of 3e-22 to 0.0 is what made the dashboard print "p = 0.0e+00".
+    """
+    if key.endswith("_p") or key.endswith("p_value"):
+        return float(f"{float(value):.3g}")
+    return round(float(value), 4)
+
+
 def sync_readme_results(table: list[str], preamble: str, verdict: str) -> bool:
     """Rewrite the README's RESULTS-TABLE block so it cannot drift from the benchmark."""
-    if not README_PATH.exists():
-        return False
-    text = README_PATH.read_text(encoding="utf-8")
-    start, end = text.find(RESULTS_START), text.find(RESULTS_END)
-    if start == -1 or end == -1:
-        return False
-    marker_end = text.find("-->", start) + len("-->")
-    block = "\n".join(["", preamble, "", *table, "", verdict, ""])
-    README_PATH.write_text(text[:marker_end] + block + text[end:], encoding="utf-8")
-    return True
+    return sync_readme_block("RESULTS-TABLE", [preamble, "", *table, "", verdict])
+
+
+def readme_findings(
+    champion: str, tests: dict, top_features: list, worst_hour: int
+) -> list[str]:
+    """The README's significance, coverage, holiday and importance paragraphs.
+
+    Generated rather than written because every figure here moves when the weekly refresh
+    rolls the snapshot forward, and a hand-written copy goes stale silently.
+    """
+    rivals = "; ".join(
+        f"{-c['mean_diff']:,.0f} MW lower MAE than {rival} "
+        f"(95% CI [{-c['ci_upper']:,.0f}, {-c['ci_lower']:,.0f}], Wilcoxon "
+        f"{p_text(c['wilcoxon_p'])}, Diebold-Mariano {p_text(c['dm_p_value'])})"
+        for rival, c in tests["comparisons"].items()
+    )
+    lines = [
+        f"**Is the win real?** Tested, not asserted: `{champion}` has {rivals}. Per-origin MAE "
+        "is the sampling unit, because hours inside one 24-hour window share weather and "
+        "demand level; Diebold-Mariano runs on hourly losses with a correction for that "
+        "dependence instead.",
+        "",
+    ]
+    cov = tests["coverage"]
+    below = cov["ci_upper"] < cov["nominal"]
+    lines += [
+        f"**Does the interval hold?** {100 * cov['mean_coverage']:.1f}% of actuals land inside "
+        f"the {100 * cov['nominal']:.0f}% band (95% CI [{100 * cov['ci_lower']:.1f}%, "
+        f"{100 * cov['ci_upper']:.1f}%], {p_text(cov['p_value'])}), "
+        + ("so the band is measurably too narrow." if below else "consistent with the target."),
+        "",
+    ]
+    holiday = tests.get("holiday_slice")
+    if holiday is not None:
+        lines += [
+            f"**Weak spot: public holidays.** Holiday hours cost {holiday['mean_diff']:,.0f} MW "
+            f"more absolute error than ordinary hours (95% CI [{holiday['ci_lower']:,.0f}, "
+            f"{holiday['ci_upper']:,.0f}], permutation {p_text(holiday['permutation_p'])}, "
+            f"Cohen's d = {holiday['cohens_d']:.2f}). The worst hour of the day is "
+            f"{worst_hour:02d}:00 Berlin time.",
+            "",
+        ]
+    if top_features:
+        (first, first_mw), *rest = top_features
+        lines += [
+            "**What it relies on.** Permutation importance on a held-out week: shuffling "
+            f"`{first}` raises MAE by {first_mw:,.0f} MW, far ahead of "
+            + ", ".join(f"`{name}` ({mw:,.0f} MW)" for name, mw in rest) + ".",
+            "",
+        ]
+    return lines[:-1]
 
 
 def plot_feature_importance(
@@ -693,14 +744,14 @@ def main() -> int:
         "interval_coverage": {k: round(float(v), 2) for k, v in coverage.items()},
         "significance": {
             "comparisons": {
-                rival: {k: round(float(v), 4) for k, v in stat.items()}
+                rival: {k: _stat(k, v) for k, v in stat.items()}
                 for rival, stat in tests["comparisons"].items()
             },
             "holiday_slice": (
-                {k: round(float(v), 4) for k, v in tests["holiday_slice"].items()}
+                {k: _stat(k, v) for k, v in tests["holiday_slice"].items()}
                 if tests["holiday_slice"] is not None else None
             ),
-            "coverage": {k: round(float(v), 4) for k, v in tests["coverage"].items()},
+            "coverage": {k: _stat(k, v) for k, v in tests["coverage"].items()},
             "champion_beats_all_rivals": bool(beats_all),
         },
         "top_features": [list(pair) for pair in (importance or {}).get("top_features", [])],
@@ -717,16 +768,20 @@ def main() -> int:
         f"{test_start:%b %Y} – {test_end:%b %Y}):",
         f"Paired bootstrap over the {worst['n']} origins puts the champion's MAE advantage at "
         f"[{-worst['ci_upper']:,.0f}, {-worst['ci_lower']:,.0f}] MW against its closest rival "
-        f"(Wilcoxon p = {worst['wilcoxon_p']:.1e}) — see "
-        "[reports/benchmark.md](reports/benchmark.md) for the full significance section.",
+        f"(Wilcoxon {p_text(worst['wilcoxon_p'])}). Full significance section in "
+        "[reports/benchmark.md](reports/benchmark.md).",
     )
+    synced_findings = sync_readme_block("FINDINGS", readme_findings(
+        champion, tests, summary_payload["top_features"], summary_payload["worst_hour"],
+    ))
 
     figures = 3 + (importance is not None)
     print(
         f"\nWrote {REPORT_PATH}, {METRICS_PATH}, {HOURLY_PATH}, {POOLED_PATH}, {SUMMARY_PATH}, and "
         f"{figures} figures to {FIG_DIR}/"
     )
-    print(f"README results block: {'rewritten' if synced else 'NOT found — markers missing'}")
+    for label, done in (("results", synced), ("findings", synced_findings)):
+        print(f"README {label} block: {'rewritten' if done else 'NOT found (markers missing)'}")
     print(
         f"Interval coverage: {coverage['empirical']:.1f}% empirical vs "
         f"{coverage['nominal']:.0f}% nominal over {coverage['hours_scored']:,} hours"
