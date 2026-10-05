@@ -2,7 +2,6 @@
   "source": "Bundesnetzagentur | SMARD.de",
   "source_url": "https://www.smard.de/app/chart_data/410/DE/index_hour.json",
   "chunk_urls": [
-    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1759701600000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1760306400000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1760911200000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1761519600000.json",
@@ -53,15 +52,16 @@
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1788732000000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1789336800000.json",
     "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1789941600000.json",
-    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1790546400000.json"
+    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1790546400000.json",
+    "https://www.smard.de/app/chart_data/410/DE/410_DE_hour_1791151200000.json"
   ],
   "module_id": 410,
   "region": "DE",
   "resolution": "hour",
-  "collected_at": "2026-09-30T18:17:34.944135+00:00",
-  "rows": 8635,
-  "first_timestamp": "2025-10-05T22:00:00+00:00",
-  "last_timestamp": "2026-09-30T16:00:00+00:00",
+  "collected_at": "2026-10-05T12:22:11.428186+00:00",
+  "rows": 8581,
+  "first_timestamp": "2025-10-12T22:00:00+00:00",
+  "last_timestamp": "2026-10-05T10:00:00+00:00",
   "quality": {
     "passed": true,
     "checks": [
@@ -76,8 +76,8 @@
         "name": "non_empty",
         "passed": true,
         "severity": "error",
-        "detail": "8,635 rows",
-        "value": 8635
+        "detail": "8,581 rows",
+        "value": 8581
       },
       {
         "name": "timezone_aware_utc",
@@ -104,8 +104,8 @@
         "name": "has_observations",
         "passed": true,
         "severity": "error",
-        "detail": "8,635 observed hours",
-        "value": 8635
+        "detail": "8,581 observed hours",
+        "value": 8581
       },
       {
         "name": "plausible_range",
