@@ -32,12 +32,7 @@ from energy_forecast.theme import (
     SURFACE,
     plotly_layout,
 )
-from energy_forecast.verification import (
-    DEFAULT_LOG_PATH,
-    daily_scores,
-    join_log_to_actuals,
-    load_forecast_log,
-)
+from energy_forecast.verification import daily_scores
 
 GBM = MODEL_COLORS["HistGradientBoosting"]
 BERLIN = "Europe/Berlin"
@@ -76,13 +71,12 @@ def record_figure(
     the lines rather than over them.
 
     The band is one closed polygon per contiguous run of bounds, not a single
-    `fill="tonexty"` pair: tonexty fills straight across NaN gaps, so the published log
-    (which has hours no origin covered) would draw diagonal wedges through every hole.
+    `fill="tonexty"` pair: tonexty fills straight across NaN gaps, so any hour without
+    bounds would draw a diagonal wedge through the hole.
 
     `shade_until` bounds the missing-data shading at the last published hour. Without it a
-    forecast for hours that simply have not happened yet reads as a reporting gap, and the
-    published-log chart — whose hours are all in the future when it is first written —
-    would shade solid grey. Absent demand after that instant is the future, not a hole.
+    forecast for hours that simply have not happened yet reads as a reporting gap. Absent
+    demand after that instant is the future, not a hole.
     """
     fig = go.Figure()
     has_band = plot.upper_bound.notna() & plot.lower_bound.notna()
@@ -192,21 +186,13 @@ def file_stamp(path: Path) -> str:
     return f"{stat.st_size}:{stat.st_mtime_ns}"
 
 
-@st.cache_data(show_spinner="Scoring the published forecast log...")
-def published_forecasts(_service: ForecastService, cache_key: str, log_key: str) -> pd.DataFrame:
-    # `log_key` is never read here: it is in the signature purely so that a commit from the
-    # forecast-logging workflow invalidates this join. `cache_key` alone would not — the log
-    # gains a new origin without the demand snapshot changing at all.
-    return join_log_to_actuals(load_forecast_log(DEFAULT_LOG_PATH), _service.history)
-
-
 @st.cache_data(show_spinner="Reading the model-health history...")
 def drift_history(runs_key: str, scores_key: str):
     """Retained run summaries and per-origin scores, or None when nothing is recorded yet.
 
-    No `_service` argument, unlike `published_forecasts`: these are two plain file reads
-    of artifacts the benchmark commits, and the demand snapshot cannot change them, so the
-    two file stamps are the whole cache key.
+    No `_service` argument: these are two plain file reads of artifacts the benchmark
+    commits, and the demand snapshot cannot change them, so the two file stamps are the
+    whole cache key.
     """
     scores = drift.load_origin_history(drift.ORIGIN_HISTORY_PATH)
     if scores.empty:
@@ -431,81 +417,6 @@ with record_tab:
         st.caption(
             "Seven separate 24-hour forecasts, one per day, each refit on data dated at or "
             "before its own origin."
-        )
-
-    st.divider()
-    st.subheader("Published forecasts vs what happened")
-    log_key = file_stamp(DEFAULT_LOG_PATH)
-    published = published_forecasts(service, cache_key, log_key)
-    published_scores = daily_scores(published)
-    scored_origins = (
-        0 if published_scores.empty else int((published_scores.hours_scored > 0).sum())
-    )
-    if published.empty:
-        st.info(
-            "Nothing logged yet. A daily GitHub Action issues one 24-hour forecast from the last "
-            "published hour and commits it to `data/forecasts/forecast_log.csv`. The first "
-            "comparison appears once those forecast hours have themselves been published by "
-            "SMARD, which lags by several hours up to about a day."
-        )
-    else:
-        # Consecutive logged origins are not exactly 24h apart: SMARD's publication lag moves,
-        # so the origin the workflow forecasts from moves with it. Two consequences.
-        # (1) Windows overlap. On an overlapping hour, plot the most recent origin's value —
-        #     the freshest forecast for that hour — but score every logged origin in the table
-        #     below, because each one was a separate published claim.
-        # (2) When the lag *grew*, no origin covers some hours at all. Reindexing onto a
-        #     continuous hourly grid leaves those as NaN so the forecast line breaks there.
-        #     Do not bridge it: a hole in the log is not a forecast.
-        latest_per_hour = (
-            published.sort_values(["timestamp", "origin"])
-            .drop_duplicates("timestamp", keep="last")
-        )
-        grid = pd.DataFrame(
-            {
-                "timestamp": pd.date_range(
-                    published.timestamp.min(), published.timestamp.max(), freq="1h", tz="UTC"
-                )
-            }
-        )
-        published_plot = grid.merge(
-            latest_per_hour[["timestamp", "prediction", "lower_bound", "upper_bound"]],
-            on="timestamp", how="left",
-        ).merge(
-            # Actuals off the full history, not off the join: a grid hour with no logged
-            # forecast still has an observation, and the observed line should keep going.
-            history[["timestamp", "demand_mw"]], on="timestamp", how="left",
-        )
-        published_plot["local"] = published_plot.timestamp.dt.tz_convert(BERLIN)
-        st.plotly_chart(
-            record_figure(
-                published_plot, FORECAST, "Published forecast",
-                shade_until=service.last_observed,
-            ),
-            width="stretch",
-        )
-        st.dataframe(score_table(published_scores), hide_index=True, width="stretch")
-
-        if scored_origins == 0:
-            st.caption(
-                f"{len(published_scores)} forecast{'s' if len(published_scores) != 1 else ''} "
-                "logged, none scorable yet. SMARD has not published any of the hours they cover."
-            )
-        elif scored_origins < 3:
-            st.caption(
-                f"Only {scored_origins} logged forecast"
-                f"{'s have' if scored_origins != 1 else ' has'} a published hour to score "
-                "against, so read it as a smoke test."
-            )
-        else:
-            mean_mae = float(published_scores.mae.mean())
-            st.markdown(
-                f"**Mean MAE across {scored_origins} published forecasts: {mean_mae:,.0f} MW.**"
-            )
-
-        st.caption(
-            "Forecasts the daily workflow committed to git before the outcome was known, "
-            "against what SMARD has since published."
         )
 
     st.caption(
@@ -741,14 +652,6 @@ with quality_tab:
             "Each line is a 14-origin trailing mean of that model's 24-hour MAE. "
             "HistGradientBoosting stays below both baselines across the whole year."
         )
-
-        importance_png = REPORTS / "figures" / "benchmark_feature_importance.png"
-        slices_png = REPORTS / "figures" / "benchmark_error_slices.png"
-        cols = st.columns(2)
-        if importance_png.exists():
-            cols[0].image(str(importance_png), caption="Permutation importance (validation week)")
-        if slices_png.exists():
-            cols[1].image(str(slices_png), caption=f"Where {summary['champion']} errs")
 
 
 # --------------------------------------------------------------------------------------
@@ -999,14 +902,12 @@ with about_tab:
         "most recent hours often carry no reading. They appear as gaps or shaded bands and are "
         "reported rather than imputed, and excluded from the scores rather than filled in, "
         "which is why some 24-hour windows show fewer than 24 hours scored.\n"
-        "- **Replay versus published log.** The replayed week refits a model at each origin on "
+        "- **What the replay is.** The replayed week refits a model at each origin on "
         "rows dated at or before that origin, so no future value can reach it. But it is "
         "computed after the fact, with today's data, so it shows what the model *would have* "
-        "said, not what it did say. The published log holds rows written before the outcome was "
-        "known and never revised; a re-issued forecast for the same hour replaces the older one, "
-        "and nothing else does. That is the one thing a replay cannot manufacture. Until about "
-        "three origins have a published hour to score against, read the log as a smoke test: a "
-        "day or two is an anecdote, not evidence.\n"
+        "said, not what it did say. The forecasts actually issued each day are committed to "
+        "`data/forecasts/forecast_log.csv` before the outcome is known; that log lives in the "
+        "repository and is not charted here.\n"
         "- **Scores can move.** Actuals are SMARD's readings *as currently published*, and SMARD "
         "does revise history, so a score already shown here can shift slightly after the fact.\n"
         "- **Model health.** The reference is matched by day of the year, starting at ±21 days "
