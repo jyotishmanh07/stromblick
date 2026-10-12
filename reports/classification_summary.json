@@ -6,32 +6,32 @@
     "labelled_days": 320,
     "models": {
       "HistGradientBoosting": {
-        "pr_auc": 0.5809,
-        "pr_auc_lift": 2.074,
-        "roc_auc": 0.8187,
-        "brier": 0.1789,
-        "base_rate": 0.28
+        "pr_auc": 0.6402,
+        "pr_auc_lift": 2.099,
+        "roc_auc": 0.8405,
+        "brier": 0.1744,
+        "base_rate": 0.305
       },
       "Calendar logistic": {
-        "pr_auc": 0.3961,
-        "pr_auc_lift": 1.415,
-        "roc_auc": 0.7076,
-        "brier": 0.2012,
-        "base_rate": 0.28
+        "pr_auc": 0.4185,
+        "pr_auc_lift": 1.372,
+        "roc_auc": 0.7146,
+        "brier": 0.1907,
+        "base_rate": 0.305
       },
       "Majority class": {
-        "pr_auc": 0.2581,
-        "pr_auc_lift": 0.922,
-        "roc_auc": 0.4607,
-        "brier": 0.203,
-        "base_rate": 0.28
+        "pr_auc": 0.3347,
+        "pr_auc_lift": 1.097,
+        "roc_auc": 0.5363,
+        "brier": 0.213,
+        "base_rate": 0.305
       }
     },
     "operating_point": {
       "threshold": 0.05,
-      "precision": 0.4845,
-      "recall": 0.8393,
-      "flagged": 97
+      "precision": 0.55,
+      "recall": 0.9016,
+      "flagged": 100
     }
   },
   "anomaly": {
@@ -41,32 +41,32 @@
     "labelled_days": 319,
     "models": {
       "HistGradientBoosting": {
-        "pr_auc": 0.7027,
-        "pr_auc_lift": 7.769,
-        "roc_auc": 0.9248,
-        "brier": 0.0493,
-        "base_rate": 0.0905
+        "pr_auc": 0.6268,
+        "pr_auc_lift": 6.564,
+        "roc_auc": 0.9111,
+        "brier": 0.0622,
+        "base_rate": 0.0955
       },
       "Calendar logistic": {
-        "pr_auc": 0.5377,
-        "pr_auc_lift": 5.945,
-        "roc_auc": 0.9101,
-        "brier": 0.0985,
-        "base_rate": 0.0905
+        "pr_auc": 0.5589,
+        "pr_auc_lift": 5.854,
+        "roc_auc": 0.9164,
+        "brier": 0.0944,
+        "base_rate": 0.0955
       },
       "Majority class": {
-        "pr_auc": 0.083,
-        "pr_auc_lift": 0.917,
-        "roc_auc": 0.4449,
-        "brier": 0.0834,
-        "base_rate": 0.0905
+        "pr_auc": 0.0828,
+        "pr_auc_lift": 0.867,
+        "roc_auc": 0.4099,
+        "brier": 0.0876,
+        "base_rate": 0.0955
       }
     },
     "operating_point": {
-      "threshold": 0.05,
-      "precision": 0.4839,
-      "recall": 0.8333,
-      "flagged": 31
+      "threshold": 0.1,
+      "precision": 0.5556,
+      "recall": 0.7895,
+      "flagged": 27
     }
   }
 }
