@@ -8,15 +8,15 @@ Two baselines make the comparison honest: a majority-class predictor (the floor)
 
 ## High-demand day
 
-320 labelled days, 200 scored chronologically after a 120-day warm-up; every model refit at every origin. Positive rate over the scored window: 34.0% (68 days).
+320 labelled days, 200 scored chronologically after a 120-day warm-up; every model refit at every origin. Positive rate over the scored window: 36.0% (72 days).
 
 | Model | PR-AUC | Lift over base rate | ROC-AUC | Brier |
 |---|---|---|---|---|
-| HistGradientBoosting | 0.702 | 2.06× | 0.845 | 0.1813 |
-| Calendar logistic | 0.624 | 1.84× | 0.802 | 0.1654 |
-| Majority class | 0.482 | 1.42× | 0.624 | 0.2279 |
+| HistGradientBoosting | 0.748 | 2.08× | 0.863 | 0.1806 |
+| Calendar logistic | 0.741 | 2.06× | 0.859 | 0.1506 |
+| Majority class | 0.516 | 1.43× | 0.643 | 0.2353 |
 
-**HistGradientBoosting** ranks best. PR-AUC is read against the base rate, not against 0.5 — the lift column is the honest version. The majority-class row is the floor: it predicts the training positive rate for every day, so any ranking it appears to achieve is noise.
+**HistGradientBoosting** ranks best. It barely separates from the calendar-only baseline, so most of the signal is the almanac rather than demand dynamics. PR-AUC is read against the base rate, not against 0.5 — the lift column is the honest version. The majority-class row is the floor: it predicts the training positive rate for every day, so any ranking it appears to achieve is noise.
 
 ![Precision-recall](figures/classification_pr_high_demand.png)
 
@@ -24,19 +24,19 @@ Two baselines make the comparison honest: a majority-class predictor (the floor)
 
 ### Choosing an operating point
 
-Assuming a missed day costs 10× a false alarm, expected cost is lowest at a threshold of **0.05** — flagging 102 days to catch 59 of 68, at 58% precision and 87% recall. That ratio is an assumption, not a measurement: change it and the operating point moves, which is the point of reporting the whole curve rather than one number.
+Assuming a missed day costs 10× a false alarm, expected cost is lowest at a threshold of **0.05** — flagging 105 days to catch 67 of 72, at 64% precision and 93% recall. That ratio is an assumption, not a measurement: change it and the operating point moves, which is the point of reporting the whole curve rather than one number.
 
-> **This is a boundary solution.** The minimum sits at the lowest threshold searched, which means a 10:1 cost ratio against a 34% base rate is extreme enough that flagging nearly everything wins — the model is barely consulted. Read it as a statement about the assumed costs, not as a tuned threshold. A ratio below roughly 2:1 is where the decision starts depending on the model's ranking at all.
+> **This is a boundary solution.** The minimum sits at the lowest threshold searched, which means a 10:1 cost ratio against a 36% base rate is extreme enough that flagging nearly everything wins — the model is barely consulted. Read it as a statement about the assumed costs, not as a tuned threshold. A ratio below roughly 2:1 is where the decision starts depending on the model's ranking at all.
 
 ## Anomaly day
 
-319 labelled days, 199 scored chronologically after a 120-day warm-up; every model refit at every origin. Positive rate over the scored window: 10.1% (20 days).
+319 labelled days, 199 scored chronologically after a 120-day warm-up; every model refit at every origin. Positive rate over the scored window: 9.5% (19 days).
 
 | Model | PR-AUC | Lift over base rate | ROC-AUC | Brier |
 |---|---|---|---|---|
-| HistGradientBoosting | 0.615 | 6.11× | 0.905 | 0.0718 |
-| Calendar logistic | 0.502 | 5.00× | 0.909 | 0.0791 |
-| Majority class | 0.085 | 0.85× | 0.399 | 0.0913 |
+| HistGradientBoosting | 0.570 | 5.97× | 0.906 | 0.0654 |
+| Calendar logistic | 0.424 | 4.45× | 0.894 | 0.0679 |
+| Majority class | 0.083 | 0.87× | 0.410 | 0.0873 |
 
 **HistGradientBoosting** ranks best. PR-AUC is read against the base rate, not against 0.5 — the lift column is the honest version. The majority-class row is the floor: it predicts the training positive rate for every day, so any ranking it appears to achieve is noise.
 
@@ -46,9 +46,7 @@ Assuming a missed day costs 10× a false alarm, expected cost is lowest at a thr
 
 ### Choosing an operating point
 
-Assuming a missed day costs 10× a false alarm, expected cost is lowest at a threshold of **0.05** — flagging 30 days to catch 14 of 20, at 47% precision and 70% recall. That ratio is an assumption, not a measurement: change it and the operating point moves, which is the point of reporting the whole curve rather than one number.
-
-> **This is a boundary solution.** The minimum sits at the lowest threshold searched, which means a 10:1 cost ratio against a 10% base rate is extreme enough that flagging nearly everything wins — the model is barely consulted. Read it as a statement about the assumed costs, not as a tuned threshold. A ratio below roughly 9:1 is where the decision starts depending on the model's ranking at all.
+Assuming a missed day costs 10× a false alarm, expected cost is lowest at a threshold of **0.10** — flagging 31 days to catch 15 of 19, at 48% precision and 79% recall. That ratio is an assumption, not a measurement: change it and the operating point moves, which is the point of reporting the whole curve rather than one number.
 
 ## Label design
 
