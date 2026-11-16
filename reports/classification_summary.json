@@ -1,37 +1,37 @@
 {
   "high_demand": {
     "label": "High-demand day",
-    "champion": "Calendar logistic",
+    "champion": "HistGradientBoosting",
     "scored_days": 200,
     "labelled_days": 320,
     "models": {
-      "Calendar logistic": {
-        "pr_auc": 0.7905,
-        "pr_auc_lift": 2.053,
-        "roc_auc": 0.8718,
-        "brier": 0.1463,
-        "base_rate": 0.385
-      },
       "HistGradientBoosting": {
-        "pr_auc": 0.7559,
-        "pr_auc_lift": 1.963,
-        "roc_auc": 0.8635,
-        "brier": 0.181,
-        "base_rate": 0.385
+        "pr_auc": 0.8184,
+        "pr_auc_lift": 2.098,
+        "roc_auc": 0.8845,
+        "brier": 0.1728,
+        "base_rate": 0.39
+      },
+      "Calendar logistic": {
+        "pr_auc": 0.8081,
+        "pr_auc_lift": 2.072,
+        "roc_auc": 0.8723,
+        "brier": 0.1475,
+        "base_rate": 0.39
       },
       "Majority class": {
-        "pr_auc": 0.5428,
-        "pr_auc_lift": 1.41,
-        "roc_auc": 0.6516,
-        "brier": 0.2439,
-        "base_rate": 0.385
+        "pr_auc": 0.5449,
+        "pr_auc_lift": 1.397,
+        "roc_auc": 0.6466,
+        "brier": 0.2455,
+        "base_rate": 0.39
       }
     },
     "operating_point": {
       "threshold": 0.05,
-      "precision": 0.554,
-      "recall": 1.0,
-      "flagged": 139
+      "precision": 0.6759,
+      "recall": 0.9359,
+      "flagged": 108
     }
   },
   "anomaly": {
@@ -41,32 +41,32 @@
     "labelled_days": 319,
     "models": {
       "HistGradientBoosting": {
-        "pr_auc": 0.6358,
-        "pr_auc_lift": 6.659,
-        "roc_auc": 0.9269,
-        "brier": 0.0678,
-        "base_rate": 0.0955
+        "pr_auc": 0.69,
+        "pr_auc_lift": 6.539,
+        "roc_auc": 0.9104,
+        "brier": 0.0528,
+        "base_rate": 0.1055
       },
       "Calendar logistic": {
-        "pr_auc": 0.4167,
-        "pr_auc_lift": 4.364,
-        "roc_auc": 0.8924,
-        "brier": 0.0678,
-        "base_rate": 0.0955
+        "pr_auc": 0.5025,
+        "pr_auc_lift": 4.762,
+        "roc_auc": 0.8957,
+        "brier": 0.0747,
+        "base_rate": 0.1055
       },
       "Majority class": {
-        "pr_auc": 0.0821,
-        "pr_auc_lift": 0.86,
-        "roc_auc": 0.4028,
-        "brier": 0.0876,
-        "base_rate": 0.0955
+        "pr_auc": 0.092,
+        "pr_auc_lift": 0.871,
+        "roc_auc": 0.3945,
+        "brier": 0.0954,
+        "base_rate": 0.1055
       }
     },
     "operating_point": {
       "threshold": 0.05,
-      "precision": 0.5,
-      "recall": 0.8421,
-      "flagged": 32
+      "precision": 0.5667,
+      "recall": 0.8095,
+      "flagged": 30
     }
   }
 }
