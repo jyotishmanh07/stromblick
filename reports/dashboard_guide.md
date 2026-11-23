@@ -1,7 +1,7 @@
 # Dashboard guide
 
 Every visual element in `app/streamlit_app.py`, tab by tab, top to bottom. Companion
-to the shorter "Reading the dashboard" section in the README.
+to the Demo section of the README.
 
 - Time-series charts use **Europe/Berlin** on the x-axis — the timezone demand actually follows, so the daily shape reads correctly. Everything is stored and computed in UTC; the conversion is for display only. (The anomaly explorer is the one exception and still labels its axis UTC.)
 - The forecast model is `HistGradientBoostingForecast` (referred to below as HGB / the GBM).

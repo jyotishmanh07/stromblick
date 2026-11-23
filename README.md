@@ -1,88 +1,201 @@
-# Stromblick
+# Stromblick: next-day electricity demand for Germany
 
 [![CI](https://github.com/jyotishmanh07/stromblick/actions/workflows/ci.yml/badge.svg)](https://github.com/jyotishmanh07/stromblick/actions/workflows/ci.yml)
 
-**Germany Electricity Demand Forecasting & Anomaly Detection**
+Live dashboard: [stromblick.streamlit.app](https://stromblick.streamlit.app/)
 
-🔗 **Live dashboard: [stromblick.streamlit.app](https://stromblick.streamlit.app/)** — pulls the latest data from the SMARD API on load (cached hourly) and forecasts forward from the most recent published hour, so the demo stays current rather than frozen at the committed snapshot.
+# Introduction & Goals
 
-Stromblick forecasts Germany's electricity demand for the next 24 hours and highlights unusually high or low demand. It demonstrates data validation, time-series feature engineering, chronological evaluation, statistical reasoning, SQL, Python, an API, a dashboard, automated tests, and Docker.
+Stromblick forecasts German electricity demand for the next 24 hours and flags hours where demand was unusually high or low. Germany's grid is getting harder to plan for. More of the supply depends on the weather, and heat pumps and electric cars keep changing the shape of demand. A bad forecast costs real money: balancing parties pay for every MW they miss, and grid operators hold reserve capacity sized to the expected error.
 
-As renewables become the majority of German generation and heat and transport electrify, supply is increasingly weather-driven and the demand curve keeps shifting — which makes short-term load forecasting more valuable, not less. Forecast error is a direct cost line for balancing-responsible parties and sets the reserve capacity system operators must hold.
+- **Data:** hourly total grid load for Germany from SMARD, the Bundesnetzagentur's public electricity market platform. About a year of history, refreshed every week.
+- **Tools:** Python (pandas, scikit-learn, statsmodels), DuckDB for the SQL reporting layer, FastAPI, Streamlit, Docker, and GitHub Actions for the scheduled jobs.
+- **What I do with it:** ingest and validate the data, build features that can't leak the future, compare three forecasting models with a walk-forward backtest, publish one forecast a day to a log in git, and watch the model for drift.
+- **Result:** the gradient-boosted model roughly halves the error of the "same hour yesterday" baseline, and that gap is statistically significant. The prediction band runs a bit narrow, and public holidays are its weakest spot. Current numbers are under [Results](#results).
 
-📄 **[Read the full write-up](reports/writeup.md)** — the business question, what the model is worth, and what it gets wrong, for a non-technical reader.
+For a non-technical summary of the business case, see the [write-up](reports/writeup.md).
 
-## Product question
+**Goal 1:** beat the simplest sensible forecast, "same hour yesterday", by enough to justify a real model.
+**How I know it worked:** the champion's MAE is about half the seasonal-naive MAE over 300+ daily forecast origins, and a paired bootstrap on per-origin errors puts the difference well clear of zero.
 
-Given all demand observed up to a timestamp, what demand should we expect during each of the next 24 hours? Which observations are unusually far above or below the expected value?
+**Goal 2:** publish a forecast every day and keep the record, so I can check later whether what I said was right.
+**How I know it worked:** a daily workflow has committed one 24-hour forecast per day to [`data/forecasts/forecast_log.csv`](data/forecasts/forecast_log.csv) since September 2026, and it refuses to log if the data it would forecast from is stale.
 
-The target is hourly demand in MW. Statistical anomalies are investigation prompts, not confirmed events or causal explanations.
+**Goal 3:** notice when the model gets worse without raising false alarms every winter.
+**How I know it worked:** on the August 2026 snapshot, 2.2% of no-drift windows crossed the warning threshold. Requiring two bad weekly runs in a row before calling it a regression brings false alarms under 1%.
 
-## Dashboard
+## Architecture
 
-![Stromblick dashboard: live metrics and the next-24-hour forecast](reports/figures/dashboard_forecast.png)
+```mermaid
+flowchart LR
+    SMARD[SMARD chart-data API] -->|weekly JSON chunks| Ingest[ingest + quality gate]
+    Ingest --> Raw[(data/raw)]
+    Ingest --> Clean[(demand_hourly.csv)]
+    Clean --> Features[leakage-safe features]
+    Features --> Models[seasonal naive / SARIMAX / gradient boosting]
+    Models --> Bench[backtest + significance tests]
+    Bench --> Reports[reports/ + README blocks]
+    Bench --> History[(reports/history)]
+    History --> Drift[drift monitor]
+    Clean --> DuckDB[(DuckDB warehouse)]
+    DuckDB --> EDA[EDA report]
+    Models --> Service[ForecastService]
+    Service --> API[FastAPI]
+    Service --> Dash[Streamlit dashboard]
+    SMARD -->|recent weeks, at page load| Dash
+    Service --> Log[(forecast_log.csv)]
+```
 
-*The forecast tab on live SMARD data: the last three days observed, then the 24-hour forecast with its residual band.*
+# Contents
 
-![Track record: seven daily forecasts replayed against what happened](reports/figures/dashboard_track_record.png)
+- [The Data Set](#the-data-set)
+  - [How much data is it](#how-much-data-is-it)
+- [Constraints](#constraints)
+- [Used Tools](#used-tools)
+  - [Connect](#connect)
+  - [Buffer](#buffer)
+  - [Processing](#processing)
+  - [Storage](#storage)
+  - [Visualization](#visualization)
+- [Pipelines](#pipelines)
+  - [Batch Processing](#batch-processing)
+  - [Stream Processing](#stream-processing)
+  - [Visualizations](#visualizations)
+- [Results](#results)
+- [Demo](#demo)
+- [What Breaks](#what-breaks)
+- [Conclusion](#conclusion)
+- [Running it yourself](#running-it-yourself)
+- [Follow Me On](#follow-me-on)
+- [Appendix](#appendix)
 
-*Track record: the last seven daily forecasts, each refit only on data available at its origin, scored against actuals.*
+# The Data Set
 
-![Model health: drift verdict, recent error against the same time of year, and interval coverage](reports/figures/dashboard_model_health.png)
+The source is SMARD module 410, actual total grid load for Germany, read through SMARD's chart-data API. There's an index file at `https://www.smard.de/app/chart_data/410/DE/index_hour.json` listing weekly chunks, and each chunk (`.../410_DE_hour_<epoch_ms>.json`) holds hourly average demand in MW keyed by epoch milliseconds. I convert that to one UTC row per hour with two columns, `timestamp` and `demand_mw`.
 
-*Model health: recent error ranked against the same time of year, plus interval coverage against its established baseline.*
+I picked it because it's official, free, updated continuously, and the problem is real: grid operators forecast exactly this number every day. It also has a few properties that make it more interesting than a clean Kaggle file:
 
-### Reading the dashboard
+- SMARD publishes actual load late. A lag of several hours up to about a day is normal, so "now" and "the last hour I have data for" are different things, and the forecast starts from the latter.
+- Recent hours can appear in the index before they have values. Those show up as gaps.
+- SMARD can revise past values, so any published number should cite the snapshot it came from. Provenance (source URLs, collection time, row count, date range) goes into `data/clean/metadata.json`.
+- Timestamps cross two DST changes a year. Everything is stored in UTC and only converted to Europe/Berlin for calendar features and display.
 
-A header metrics row sits above six tabs: latest observed demand, data freshness (hours since the most recent published SMARD observation), and the data source ("SMARD live API" when the live fetch succeeded, "SMARD clean export" when it fell back to the committed snapshot, the deterministic demo series otherwise).
+Gaps are reported, never filled in. Data is attributed to **Bundesnetzagentur | SMARD.de** under **CC BY 4.0**.
 
-**Forecast** — the last three days of observed demand (dark line) then the 24-hour forecast (blue), with a dotted marker at the forecast start. The shaded band is the forecast ± the 95th percentile of absolute residuals the model made on a held-out validation week, so its width reflects how wrong the model has recently been, not a probabilistic guarantee. Gaps in the observed line are hours SMARD has indexed but not yet published.
+If the clean CSV is missing, the API and dashboard fall back to a synthetic demo series so the code still runs. That's for smoke tests only, not for analysis.
 
-**Track record** — the last seven daily forecasts against what actually happened, with per-day MAE and interval coverage. The chart is a *replay*: each day refit on data dated at or before that day's origin, so no future value reaches it, but computed now. The forecasts the daily workflow commits at the moment it issues them are kept in `data/forecasts/forecast_log.csv` and are not charted here.
+## How much data is it
 
-**Model quality** — opens with **Model health**: a verdict (`ok` / `watch` / `regressed` / `unknown`) for the trailing 14 origins against comparable days at the same time of year, the champion's per-origin error over time with its seasonal reference band, and an interval-coverage metric judged against its established baseline rather than the 95% label. Below that, the full rolling-origin backtest from `reports/benchmark.md`: the three-model headline table, per-origin MAE for each model, and prediction-interval coverage. The message is the one the project turns on: the main model has to beat "same hour yesterday" to justify its complexity.
+Not much, which is fine for this problem:
 
-**Anomalies** — observed demand against what the model expected for each hour (dashed), over a selectable 7/14/28-day window. The band is the expected value ± the 1st/99th percentile of validation residuals, learned from the week *before* the window so the bounds never see the data they score. Hours whose deviation leaves the band get a red ✕ and a table row with observed, expected, and deviation in MW. These are statistical flags — prompts to investigate weather, calendar, or grid events — not confirmed anomalies.
+- 1 value per hour × 24 hours × 7 days = 168 rows per weekly chunk
+- 52 weekly chunks × 168 rows ≈ 8,700 rows for a year
+- That's about 300 KB as CSV, and about 650 KB of raw JSON from SMARD
 
-**Event risk** — the classification track. Tomorrow's probability of being a high-demand day, shown beside the recent base rate (a 30% forecast means something different when the base rate is 12% than when it is 30%), plus the chronological backtest of both event targets, scored by PR-AUC and lift over the base rate. The precision-recall curves live in [reports/classification.md](reports/classification.md).
+The daily forecast log adds 24 rows a day, under 9,000 rows a year. Everything fits in memory many times over, so a pandas-and-DuckDB stack is plenty and anything distributed would be overkill.
 
-**Data & methods** — the provenance of the exact SMARD snapshot in use (collection time, row count, time range, weekly-chunk count) from `data/clean/metadata.json`, the result of the ingest-time data-quality gate, plus a summary of the method (leakage-safe features, chronological evaluation, tested claims, the honest baseline, the SQL reporting layer) and a **How to read these charts** section carrying the standing caveats about intervals, unpublished hours, anomalies, and the drift rules behind Model health.
+The size that actually matters is the backtest: around 330 daily origins, each refitting three models, takes about 20 minutes on a laptop. That's what sets how often the full benchmark can run.
 
-## Method
+# Constraints
 
-The repository compares exactly three model levels:
+- **Budget:** zero. Everything runs on GitHub Actions' free tier, Streamlit Community Cloud, and my laptop.
+- **Compute:** a laptop and free CI runners. The full backtest is about 20 minutes, so it runs weekly in CI, not on every push.
+- **Data I don't control:** SMARD decides when hours get published, can revise history, and could change its API. The dashboard has to survive all three.
+- **Time:** one person, evenings. That's a big part of why there's no orchestrator or feature store.
+- **Hosting:** Streamlit Cloud's filesystem doesn't persist between restarts, so the dashboard can't save anything it fetches. It fetches into memory and caches for an hour.
+- **History:** one year of data means every season has been seen exactly once. That limits both the model and the drift monitor.
 
-1. **Seasonal naive:** same hour on the previous day, with a previous-week fallback.
-2. **SARIMAX:** an interpretable statistical baseline with daily seasonality.
-3. **HistGradientBoostingRegressor:** the main scikit-learn model using hour, weekday, month, German public-holiday and DST-transition flags, lagged demand (1h/24h/168h), and trailing means (24h/7d).
+# Used Tools
 
-`rolling_origin_backtest` evaluates future windows chronologically. Model selection belongs on validation origins; a final holdout should be passed only after that choice is made. Metrics are MAE, RMSE, and sMAPE, with error slices by hour, weekday, month, and holiday status. Residual intervals and anomaly bounds are estimated from validation residuals.
+## Connect
 
-Every lag and rolling feature is shifted first, so current or future demand cannot leak into a training row. DST-aware timestamps are normalized to UTC; naive source timestamps are interpreted as Europe/Berlin.
+[smard_api.py](src/energy_forecast/smard_api.py) reads the SMARD index and pulls the last N weekly chunks (`--weeks 52` by default). Every raw response is written to `data/raw/` first, so if a batch is rejected later I still have the evidence.
 
-**Verification** ([verification.py](src/energy_forecast/verification.py)) answers the question a backtest table does not: was the forecast we showed yesterday any good? It has two halves, and the distinction between them is the point. The *replay* refits a fresh model at each of the last seven daily origins on rows dated at or before that origin, so it shows what the model **would have** said — leakage-safe, but computed after the fact. The *log* is a CSV of forecasts written by a daily workflow at the moment they were issued and committed to git, so it shows what the model **did** say, before the outcome existed. Only the second is evidence a replay cannot manufacture; both key off the last *published* hour rather than wall-clock time.
+All sources go through one function, `canonicalize_demand()` in [data.py](src/energy_forecast/data.py). It matches column names loosely, treats timezone-less timestamps as Europe/Berlin and converts them to UTC, drops duplicates (keeping the last), and resamples to hourly.
 
-### Model health and when to retrain
+Then the quality gate in [quality.py](src/energy_forecast/quality.py) runs before anything is written to `data/clean/`. Checks come in two levels. Errors stop the ingest: bad schema, duplicate or unsorted timestamps, timestamps not in UTC, values outside 20 to 100 GW, or (optionally) a stale snapshot. Warnings get recorded but don't stop anything: the fraction of missing hours and the fraction of unpublished hours, since gaps are normal for SMARD. The full report lands in `metadata.json` and shows up in the dashboard.
 
-**The weights are never stale.** `forecast_with_interval` calls `model.fit(history)` on every forecast (≈0.44 s), and `ForecastService` fits a second model to size the residual band. Nothing is pickled — there is no serialized artifact anywhere in the repo, and every backtest, replay and logged forecast refits from scratch on the freshest data. "The model hasn't been retrained lately" is not a failure mode this project can have.
+I wrote the checks by hand instead of using Great Expectations. With one table and about ten checks, the framework would be more code to maintain than the checks themselves. At a bigger scale I'd switch.
 
-Three other things *do* go stale:
+## Buffer
 
-1. **The learned relationship.** Refitting does not help if the relationship itself has changed — a structural shift in German load (industrial demand, heat-pump and EV uptake, a changed holiday pattern) shows up as error the current features cannot absorb.
-2. **The hyperparameters.** `DEFAULT_PARAMS` were chosen by `scripts/tune.py` against one snapshot; the standing verdict is *keep defaults* (inner gain 3.5%, outer 1.3%, CI [−82, +44] MW).
-3. **The published numbers.** Every figure in the results table describes a snapshot that rolls forward weekly.
+There isn't one. Data arrives once a week in a batch, and the dashboard pulls what it needs at page load. A queue like Kafka would have nothing to smooth out.
 
-[drift.py](src/energy_forecast/drift.py) is what notices. Each complete benchmark run appends one row to `reports/history/benchmark_runs.csv` and its per-origin scores to `reports/history/origin_scores.csv`, and the trailing 14 origins are scored as a **percentile of comparable days at the same time of year**. The match is by day-of-year because error is strongly seasonal with no drift at all: on the August 2026 snapshot the thresholds were calibrated against, January MAE was 2.10× August MAE (2,855 vs 1,357 MW), so any comparison against a pooled average would flag every winter. It is a rank rather than a z-score because the error distribution is heavily right-skewed (on that snapshot: mean 1,944, median 1,548, max 10,370 MW). Thresholds are calibrated, not asserted: 2.2% of no-drift windows exceed the 0.90 cut, and `regressed` additionally requires two consecutive runs, which puts false alarms under 1% for one week of latency.
+## Processing
 
-**Re-run `scripts/tune.py` when** model health reports `regressed` on two consecutive weekly runs; `FEATURE_COLUMNS` changes; the retained history covers a season the last search never saw (roughly every six months); or the tuning verdict is over six months old. **Re-examine features when** interval coverage drifts below its established baseline, or an already-weak slice gets materially worse across runs (public-holiday hours already cost +2,741 MW absolute error; the worst hour is 14:00 Berlin).
+**Features** ([features.py](src/energy_forecast/features.py)): hour, weekday, month, German public holidays, DST-change flags, lagged demand (1h, 24h, 168h), and trailing means (24h, 7d). Every lag and rolling window is shifted by one hour before it's computed, so no row can see its own value or anything after it. There are two builders, one vectorized for training and one row-at-a-time for forecasting, and they share one column list so they can't drift apart.
 
-`model_version` is the literal `"v1"` in [models.py](src/energy_forecast/models.py). **Bump it whenever `DEFAULT_PARAMS` or `FEATURE_COLUMNS` change**, or neither the forecast log nor the health history can tell one model generation from another; `tests/test_api.py` and `tests/test_service.py` assert the value and must change with it.
+**Models** ([models.py](src/energy_forecast/models.py)), three of them:
 
-The verdict is data, never an exit code — the refresh workflow keeps committing, and drift surfaces in the dashboard's Model health panel rather than blocking a run.
+1. Seasonal naive: same hour yesterday, falling back to same hour last week.
+2. SARIMAX: a classical statistical baseline with daily seasonality.
+3. `HistGradientBoostingRegressor`: the main model. It forecasts recursively, feeding each hour's prediction back in as a lag for the next.
 
-## Results
+**Evaluation** ([evaluation.py](src/energy_forecast/evaluation.py)): a rolling-origin backtest. Pick an origin, train on everything before it, forecast the next 24 hours, score it, move forward a day, repeat. No random splits anywhere. Metrics are MAE, RMSE and sMAPE, plus error broken down by hour, weekday, month and holiday.
 
-Full rolling-origin backtest of all three levels over the collected snapshot — every model refit at every origin, no random split — is in **[reports/benchmark.md](reports/benchmark.md)** (regenerate with `PYTHONPATH=src python scripts/benchmark.py`).
+**Significance** ([inference.py](src/energy_forecast/inference.py)): a Wilcoxon test and a paired bootstrap on per-origin errors, and Diebold-Mariano on hourly errors. I use per-origin values as the sampling unit because the 24 hours in one forecast share the same weather and demand level, so treating them as independent would overstate confidence.
+
+**Prediction band and anomalies:** both come from errors on a held-out validation week. The band is the forecast plus or minus the 95th percentile of absolute validation error. Anomalies are observed hours outside the 1st to 99th percentile range. These are empirical bands, not calibrated probabilities.
+
+**Tuning** ([scripts/tune.py](scripts/tune.py)): a nested search with Optuna. The inner loop tunes on origins in the first 70% of the data, and the outer loop checks the winner on later origins it never saw. On the last search ([reports/tuning.md](reports/tuning.md)) the inner gain was 3.5% but the outer gain was 1.3%, with a confidence interval that includes zero, so I kept the defaults. A new config only replaces them if the outer interval is entirely below zero.
+
+**Daily event classifier** ([events.py](src/energy_forecast/events.py)): a side track asking a yes/no question per day. Will tomorrow be a high-demand day? Will it contain an anomalous hour? Labels use trailing-window thresholds computed only from earlier days.
+
+**Drift** ([drift.py](src/energy_forecast/drift.py)): each full benchmark run saves its per-origin errors to `reports/history/`. The most recent 14 origins are ranked against origins from the same time of year in earlier runs. It has to be the same time of year because error is strongly seasonal on its own. On the August 2026 snapshot, January MAE was 2.1 times August MAE with no drift involved, so comparing against a yearly average would flag every winter. I use a rank instead of a z-score because the error distribution has a long right tail. The result is `ok`, `watch`, `regressed` or `unknown`. It shows up in the dashboard and never fails a workflow.
+
+## Storage
+
+- **Files in git:** the clean demand CSV, its `metadata.json`, and the forecast log. They're committed on purpose: the hosted dashboard needs real data, and a forecast log is only worth something if nobody can quietly edit it. Raw SMARD payloads stay out of git and can be rebuilt by re-running the ingest.
+- **DuckDB** ([warehouse.py](src/energy_forecast/warehouse.py), [sql/](sql/)): a reporting warehouse with `fact_demand`, `dim_calendar` and `fact_forecast`. The calendar table is built from the same holiday and DST helpers the model uses, so SQL and features can't disagree on what counts as a holiday. [tests/test_warehouse.py](tests/test_warehouse.py) checks every query against a pandas equivalent. The `.duckdb` file is gitignored and rebuilt when needed.
+
+I chose DuckDB over Postgres because it's a single file with no server, and over a cloud warehouse because the data is tiny and the budget is zero. Ingestion doesn't go through the warehouse. `canonicalize_demand()` stays the only path in.
+
+There are no model files. Every forecast refits from scratch (about half a second), so nothing is ever pickled and a stale model file can't exist.
+
+## Visualization
+
+- **Streamlit dashboard** ([app/streamlit_app.py](app/streamlit_app.py)), hosted on Streamlit Community Cloud. Tab by tab walkthrough in [reports/dashboard_guide.md](reports/dashboard_guide.md).
+- **FastAPI** ([api.py](src/energy_forecast/api.py)): `GET /health` and `POST /forecast`. The request needs a timezone-aware `as_of` and a horizon of 1 to 24 hours. Responses are UTC timestamps with a prediction and band per hour.
+- **Markdown reports** under [reports/](reports/), regenerated by the scripts: EDA, benchmark, classification and tuning.
+
+# Pipelines
+
+## Batch Processing
+
+Everything is batch. There are three GitHub Actions workflows:
+
+- **Weekly refresh** ([refresh-data.yml](.github/workflows/refresh-data.yml), Mondays 05:17 UTC): ingest the last 52 weeks, run the quality gate, rebuild the warehouse and EDA, run the full backtest and the classification benchmark, run the tests, and commit the new snapshot, reports and README. If the gate fails, nothing is committed.
+- **Daily forecast log** ([log-forecast.yml](.github/workflows/log-forecast.yml), 06:23 UTC): fetch the latest data, issue one 24-hour forecast, and append it to `forecast_log.csv`. If the live fetch fails, it fails loudly and logs nothing, because a forecast made from stale data isn't a record of what would have been published. Running it twice changes nothing.
+- **CI** ([ci.yml](.github/workflows/ci.yml)): lint and tests on every push.
+
+The two committing workflows share a concurrency group, so they never push at the same time, and they write to different files.
+
+I used cron workflows instead of Airflow or Dagster. One weekly job and one daily job with no fan-out don't need a scheduler, a metadata database and a server to look after. If this grew to many sources, that's where I'd add one.
+
+The benchmark scripts rewrite the marked blocks in this README, so the numbers under [Results](#results) always match the latest run. A capped test run can't write to the drift history, and neither can an uncapped run with under 200 origins, since that usually means a broken ingest.
+
+## Stream Processing
+
+None. SMARD publishes with a lag of hours, so there's no real-time feed to stream. The closest thing is the dashboard's live fetch:
+
+- At page load it pulls recent weekly chunks and merges them onto the committed snapshot ([live.py](src/energy_forecast/live.py)), cached for an hour.
+- The number of weeks fetched depends on how old the snapshot is (between 2 and 8). A fixed two-week fetch against a two-month-old snapshot would leave a hole in the series and break the lag features.
+- Live values overwrite committed ones, but an hour that's indexed and not yet published can never overwrite a real value.
+- Any failure (API down, bad payload, failed quality check) falls back to the committed snapshot with a warning in the app.
+
+The API doesn't do any of this. It loads its data when it starts, and a network call there would slow startup and make the tests depend on the network.
+
+## Visualizations
+
+There are three published forecast views, and they answer different questions:
+
+- **Backtest:** how good is the model in general? (`reports/benchmark.md`)
+- **Replay:** what would the model have said on each of the last seven days? Each day is refit only on data available at that time, but it's computed now. (dashboard, Track record tab)
+- **Forecast log:** what did the model actually say, at the time? (`data/forecasts/forecast_log.csv`) Only this one can't be reconstructed after the fact.
+
+# Results
+
+Full report: [reports/benchmark.md](reports/benchmark.md). The tables below are regenerated by `scripts/benchmark.py` every week.
 
 <!-- RESULTS-TABLE:START — generated by scripts/benchmark.py; do not edit by hand -->
 329 daily origins, first after 28 days of history, each scored on the next 24 hours (7,896 forecast hours, Dec 2025 – Nov 2026):
@@ -96,8 +209,6 @@ Full rolling-origin backtest of all three levels over the collected snapshot —
 Paired bootstrap over the 329 origins puts the champion's MAE advantage at [1,108, 1,695] MW against its closest rival (Wilcoxon p = 5.3e-17). Full significance section in [reports/benchmark.md](reports/benchmark.md).
 <!-- RESULTS-TABLE:END -->
 
-`HistGradientBoosting` is the champion, roughly halving seasonal-naive MAE. The report also carries prediction-interval coverage walked forward with a trailing-week residual band, per-origin error, and error slices by hour, weekday, month, and holiday. The headline claims are tested rather than asserted:
-
 <!-- FINDINGS:START (generated by scripts/benchmark.py; do not edit by hand) -->
 **Is the win real?** Tested, not asserted: `HistGradientBoosting` has 1,961 MW lower MAE than Seasonal naive (95% CI [1,625, 2,312], Wilcoxon p = 3.7e-21, Diebold-Mariano p = 6.0e-29); 1,395 MW lower MAE than SARIMAX (95% CI [1,108, 1,695], Wilcoxon p = 5.3e-17, Diebold-Mariano p = 2.9e-22). Per-origin MAE is the sampling unit, because hours inside one 24-hour window share weather and demand level; Diebold-Mariano runs on hourly losses with a correction for that dependence instead.
 
@@ -108,13 +219,9 @@ Paired bootstrap over the 329 origins puts the champion's MAE advantage at [1,10
 **What it relies on.** Permutation importance on a held-out week: shuffling `lag_1h` raises MAE by 8,820 MW, far ahead of `hour` (1,803 MW), `weekday` (117 MW).
 <!-- FINDINGS:END -->
 
-The audited numbers from the original August 2026 snapshot (329 origins, MAE 1,944 MW, coverage 93.2%) are preserved at the [`benchmark-2026-08`](https://github.com/jyotishmanh07/stromblick/tree/benchmark-2026-08) tag; everything in the generated blocks above tracks the latest weekly refresh.
+The numbers from the original August 2026 snapshot are kept at the [`benchmark-2026-08`](https://github.com/jyotishmanh07/stromblick/tree/benchmark-2026-08) tag.
 
-Hyperparameters were searched with a **nested rolling-origin study** ([reports/tuning.md](reports/tuning.md), 40 Optuna trials): the inner loop searches on training-span origins, the outer loop confirms on origins the search never saw. The search improved the inner score by 3.5%, but on held-out origins the gain shrank to 1.3% with a confidence interval containing zero — so the defaults are kept. That gap between inner and outer is exactly what the nesting exists to expose.
-
-## Classification track (secondary)
-
-Forecasting is the headline result; this is a companion track that puts a second problem type on the same data. Instead of *how much* demand each hour, it asks **"is tomorrow worth planning around"** — the shape a reserve or staffing decision takes. Two daily binary targets, both labelled from past data only:
+Daily event classifier, full report in [reports/classification.md](reports/classification.md):
 
 <!-- CLASSIFICATION:START (generated by scripts/benchmark_classification.py; do not edit by hand) -->
 | Target | Champion | PR-AUC | Lift over base rate | ROC-AUC |
@@ -125,83 +232,68 @@ Forecasting is the headline result; this is a companion track that puts a second
 On the **anomaly** target the gradient-boosted model beats the calendar-only baseline (PR-AUC 0.680 vs 0.534), so those days carry demand signal beyond holidays and DST on this snapshot. On the August 2026 snapshot the two nearly tied, which is why this reading is recomputed rather than written down.
 <!-- CLASSIFICATION:END -->
 
-Full report: **[reports/classification.md](reports/classification.md)** (regenerate with `PYTHONPATH=src python scripts/benchmark_classification.py`).
+# Demo
 
-The leakage rule extends to labels: every threshold is a trailing-window quantile computed from earlier days and shifted, so the rule judging a day is fixed before that day is observed. Evaluation walks forward one day at a time, refitting at every origin. Two baselines keep it honest — a majority-class floor and a logistic regression on calendar columns alone.
+The live version is at [stromblick.streamlit.app](https://stromblick.streamlit.app/). It pulls the latest SMARD data when it loads, so it forecasts from the most recent published hour, not from whenever the snapshot was committed.
 
-One finding worth stating plainly: the **label definition itself was the hard part**. An expanding all-time top decile degenerates into "is it winter" on one year of seasonal data, and a trailing 60-day top decile still left evaluation windows with no positives at all. The report documents both dead ends rather than only the framing that worked.
+![Forecast tab: the last three days observed, then the next 24 hours with the prediction band](reports/figures/dashboard_forecast.png)
 
-## Data
+The Forecast tab shows the last three days of observed demand and the next 24 hours. The shaded band shows how wrong the model was on a recent held-out week. It isn't a probability guarantee.
 
-The source is the German Federal Network Agency's SMARD electricity-market platform, module 410 (Germany actual total grid load), read through the official chart-data API:
+![Track record tab: the last seven daily forecasts replayed against what happened](reports/figures/dashboard_track_record.png)
 
-```bash
-PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52
-```
+The Track record tab replays the last seven daily forecasts against what actually happened, with MAE and band coverage per day.
 
-The client reads the weekly index at `https://www.smard.de/app/chart_data/410/DE/index_hour.json`, then pulls each weekly chunk (`.../410_DE_hour_<epoch_ms>.json`). Payload values are average-interval demand in MW at epoch-millisecond timestamps; they are converted to UTC hourly observations with columns `timestamp` and `demand_mw`. It defaults to the latest 52 weekly chunks (`--weeks` to change).
+![Model health panel: drift verdict, recent error against the same time of year, and band coverage](reports/figures/dashboard_model_health.png)
 
-Every raw index/chunk response is written to `data/raw/`, canonical hourly demand to `data/clean/demand_hourly.csv`, and provenance (source URLs, collection time, row count, snapshot bounds) to `data/clean/metadata.json`. Missing hourly timestamps are reported, never imputed. Three files under `data/` are tracked in git — the demand snapshot, its `metadata.json`, and `data/forecasts/forecast_log.csv` — because the deployed dashboard serves real data and the forecast log is only worth anything if it is durable. The raw payloads are not; re-run the ingest command to rebuild them.
+The Model health panel shows the drift verdict, recent per-origin error against the same time of year, and band coverage compared with its usual level.
 
-Attribute the data to **Bundesnetzagentur | SMARD.de** under **CC BY 4.0**. SMARD may revise historical grid-load values, so a published result should cite the collected snapshot recorded in `metadata.json`.
+The other tabs cover the full backtest, an anomaly explorer, tomorrow's high-demand-day probability next to the recent base rate, and the data provenance and quality report. [reports/dashboard_guide.md](reports/dashboard_guide.md) goes through every chart.
 
-The API and dashboard fall back to deterministic synthetic demo data when the clean file is absent. This keeps local smoke tests reproducible; it is not a substitute for official data in a published analysis.
+# What Breaks
 
-### Live data in the dashboard
+- **What breaks first: the prediction band.** It's built from one week of validation error and consistently covers a little less than its 95% label. Holidays are the worst case: the model only sees each one once a year. The next thing I'd try is tuning the band's window length and percentile against coverage.
+- **What I deliberately skipped: weather.** The model only uses past demand and the calendar. Temperature, wind and solar forecasts would almost certainly help, but I wanted the demand-only comparison to be solid before adding inputs I'd also have to forecast.
+- **Risk I accepted: one year of history.** Every season has been seen once. The classifier has a few hundred labelled days, so its rankings are a hint, not a verdict. The drift monitor says `unknown` when it has no same-season history to compare with, and the first winter will probably show `watch` just because there's no earlier winter on record.
+- **What I'd change for production:** add weather inputs, save the exact data each forecast was made from, keep a final untouched test period, and move the weekly job into a real orchestrator once there's more than one source.
 
-The committed CSV is a fixed historical export, so an app reading only that file forecasts forward from whenever it was collected. The dashboard therefore fetches the recent tail from SMARD at load time and merges it onto the committed history ([live.py](src/energy_forecast/live.py)), cached for an hour.
+People: the data is national grid load added up across all of Germany. There's nothing about individuals in it, and the anomaly flags describe hours, not anyone's behaviour.
 
-How many weekly chunks to pull is **computed, not fixed**: `ceil(gap / 7 days) + 1`, clamped to 2–8. A fixed two-week fetch would be correct only while the snapshot is fresh — left alone for two months it would leave a two-month hole that `canonicalize_demand` resamples into NaN rows, breaking lag lookups either side of the seam. Beyond eight weeks the snapshot needs a real re-ingest, so the app says so rather than serving a series with a gap in it.
+# Conclusion
 
-Merging is safe by construction. `canonicalize_demand` drops null rows *before* de-duplicating with `keep="last"`, and `keep="last"` follows concatenation order — so `pd.concat([committed, live])` lets live values correct the snapshot, while an hour SMARD has indexed but not yet published can never overwrite a good committed value.
+The gradient-boosted model clearly beats both baselines, and the significance tests back that up instead of just pointing at a lower average. The parts that took the most work weren't the model:
 
-Every failure path — unreachable API, malformed payload, a chunk with no published hours, a quality-gate error — falls back to the committed snapshot and shows a warning in the app. A hosted demo should not break because an upstream API changed shape.
+- **Defining the labels for the classifier was the hardest part.** My first attempt, "top 10% of all days so far", just learned "is it winter". A trailing 60-day top 10% still left whole test months with no positive days. The trailing 30-day top 30% was the third attempt. [reports/classification.md](reports/classification.md) documents the two that failed.
+- **Nested tuning was worth it.** The inner search showed a gain, but most of it disappeared on unseen origins. Without the outer loop I'd have shipped a config that only looked better.
+- **Seasonality breaks naive monitoring.** A drift check that compares against the overall average would go red every January. Comparing to the same time of year was what made it usable.
+- **A backtest isn't a track record.** Being able to replay old forecasts didn't prove what the model said at the time. That's why the forecast log is committed to git every day.
 
-The FastAPI service deliberately does **not** do this: [api.py](src/energy_forecast/api.py) builds its `ForecastService` at module import, so a network call there would slow every startup and put the API tests on the network. `live=True` is opt-in and dashboard-only.
-
-Note that SMARD publishes actual grid load well after the fact — a lag of several hours up to about a day is normal — so the forecast origin trails wall-clock time. The dashboard shows that lag explicitly as a "Data freshness" metric.
-
-### Data quality
-
-Ingestion runs an explicit gate before anything is written ([quality.py](src/energy_forecast/quality.py)). `canonicalize_demand()` already rejects structurally broken input; the gate catches the class of problem that parses cleanly but is still wrong — a decimal-shifted value, a stale snapshot, a week of holes.
-
-Checks are graded. **Errors** (schema, duplicate timestamps, non-UTC or unsorted stamps, values outside 20–100 GW, optional staleness) abort the ingest and raise `DataValidationError`. **Warnings** (gap fraction, unpublished-hour fraction) are recorded but never fatal, because gaps are a normal property of a SMARD snapshot — this project reports them rather than imputing them. The full per-check report is written into `data/clean/metadata.json` and surfaced in the dashboard's *Data & methods* tab.
-
-A weekly [GitHub Actions workflow](.github/workflows/refresh-data.yml) re-ingests, validates, regenerates every report, runs the test suite, and commits the refreshed snapshot. A second, daily [workflow](.github/workflows/log-forecast.yml) issues one 24-hour forecast and appends it to `data/forecasts/forecast_log.csv`; it fails rather than logging anything if the live fetch did not succeed, because a forecast issued from a stale origin is not a record of what was published. Both are deliberately cron jobs rather than Airflow: at one weekly task with no fan-out, an orchestrator would add a scheduler, a metadata database, and infrastructure to babysit without changing what actually runs. At production scale this role belongs to Great Expectations or dbt tests behind Airflow or Dagster — noted as the scale-up path rather than imported for the label.
-
-### SQL layer
-
-Reporting aggregations run as SQL against a DuckDB warehouse built from the canonical snapshot:
-
-```bash
-PYTHONPATH=src python scripts/build_warehouse.py    # data/clean/warehouse.duckdb
-```
-
-Three tables: `fact_demand` (hourly observations), `dim_calendar` (local hour, weekday, month, weekend/holiday/DST flags, day type), and `fact_forecast` (per-origin, per-model backtest predictions, populated from `scripts/benchmark.py` output). The calendar dimension is materialised from the same helpers the model features use, so a SQL slice and a model feature cannot disagree about what counts as a holiday.
-
-Queries live in [sql/](sql/) — daily profile by day type, weekly and monthly patterns, holiday-vs-ordinary demand, missing-hour reporting, error slices, and the headline model summary. `scripts/generate_eda.py` runs them to build the EDA report; [tests/test_warehouse.py](tests/test_warehouse.py) asserts each matches its pandas equivalent, so the SQL is verified rather than decorative.
-
-Ingestion is deliberately *not* routed through the warehouse: `canonicalize_demand()` stays the single funnel every source passes through. The warehouse is derived, gitignored, and rebuilt on demand.
-
-## Run locally
+# Running it yourself
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q
-uvicorn energy_forecast.api:app --reload
-streamlit run app/streamlit_app.py
+uvicorn energy_forecast.api:app --reload    # API on :8000
+streamlit run app/streamlit_app.py           # dashboard on :8501
 ```
 
-Rebuild the analysis artifacts from the clean snapshot:
+Or both services with Docker:
 
 ```bash
-PYTHONPATH=src python scripts/generate_eda.py    # reports/eda.md + figures
-PYTHONPATH=src python scripts/benchmark.py        # reports/benchmark.md + figures + metrics CSV
+docker compose up --build
 ```
 
-API examples:
+Refresh the data and rebuild the reports:
+
+```bash
+PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52
+PYTHONPATH=src python scripts/generate_eda.py        # reports/eda.md + figures
+PYTHONPATH=src python scripts/benchmark.py           # reports/benchmark.md, ~20 min
+```
+
+Call the API:
 
 ```bash
 curl http://localhost:8000/health
@@ -210,21 +302,10 @@ curl -X POST http://localhost:8000/forecast \
   -d '{"as_of":"2026-08-28T00:00:00Z","horizon_hours":24}'
 ```
 
-`POST /forecast` requires a timezone-aware ISO timestamp and accepts horizons from 1 through 24 hours. The response always includes UTC timestamps, point predictions, and symmetric residual-based interval bounds.
+# Follow Me On
 
-## Docker
+GitHub: [jyotishmanh07](https://github.com/jyotishmanh07)
 
-```bash
-docker compose up --build
-```
+# Appendix
 
-The FastAPI service is at `http://localhost:8000`; the Streamlit dashboard is at `http://localhost:8501`.
-
-## Limitations and next work
-
-- Demand-only features are the first baseline. Renewable generation, temperature, wind, and solar forecasts should be added only after the demand-only comparison is stable.
-- The bundled interval is empirical, based on historical validation residual magnitudes; it is not a calibrated probabilistic forecast, and it measurably under-covers its 95% target (see the coverage test under Results). Sweeping the residual-window length and band quantile against coverage-versus-sharpness is the obvious next task.
-- One year of data means seasonal patterns are observed once. The classification track works with a few hundred labelled days, so its rankings are indicative rather than settled. The same limit binds the drift monitor: until the retained history spans more than a year, some windows have no comparable season to score against and correctly report `unknown`, and the first winter will likely read `watch` simply because no earlier winter exists to compare it with.
-- The run ledger grows one row per week, so it will not support a statistic of its own for a long time. The per-origin file is the primary artifact for exactly that reason.
-- SMARD licensing, export shape, revision policy, and availability should be documented for the exact dataset snapshot used in a published analysis.
-- A production version should add scheduled ingestion, persistent model artifacts, monitoring, weather covariates, and a final untouched test report.
+README structure based on the template from Andreas Kretz's [Data Engineering Cookbook](https://github.com/andkret/Cookbook).
