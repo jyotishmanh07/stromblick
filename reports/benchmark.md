@@ -1,43 +1,43 @@
 # Model benchmark
 
-Snapshot: `2025-11-23 23:00:00+00:00` to `2026-11-16 11:00:00+00:00` (8,581 hourly rows). Source: Bundesnetzagentur | SMARD.de, module 410 (Germany actual total grid load), CC BY 4.0.
+Snapshot: `2025-11-30 23:00:00+00:00` to `2026-11-23 09:00:00+00:00` (8,579 hourly rows). Source: Bundesnetzagentur | SMARD.de, module 410 (Germany actual total grid load), CC BY 4.0.
 
-Rolling-origin backtest: **329 origins** spaced 24h apart, the first after 28 days of history. Each origin trains on all data up to that point and is scored on the next 24 hours; every model is refit at every origin. Evaluation spans `2025-12-21 23:00:00+00:00` to `2026-11-15 22:00:00+00:00` (7,896 forecast hours). No random split is used, and every feature lag is shifted so no training row can see its own or a future value.
+Rolling-origin backtest: **329 origins** spaced 24h apart, the first after 28 days of history. Each origin trains on all data up to that point and is scored on the next 24 hours; every model is refit at every origin. Evaluation spans `2025-12-28 23:00:00+00:00` to `2026-11-22 22:00:00+00:00` (7,896 forecast hours). No random split is used, and every feature lag is shifted so no training row can see its own or a future value.
 
 ## Headline metrics
 
 | Model | MAE (MW) | RMSE (MW) | sMAPE (%) | MAE vs seasonal-naive |
 |---|---|---|---|---|
-| Seasonal naive | 3,880 (±3,288) | 4,407 | 7.51 | — |
-| SARIMAX | 3,313 (±2,727) | 3,914 | 6.35 | -14.6% |
-| HistGradientBoosting | 1,984 (±1,513) | 2,403 | 3.70 | -48.9% |
+| Seasonal naive | 3,892 (±3,304) | 4,419 | 7.52 | — |
+| SARIMAX | 3,326 (±2,762) | 3,927 | 6.37 | -14.5% |
+| HistGradientBoosting | 1,931 (±1,337) | 2,342 | 3.61 | -50.4% |
 
 MAE and RMSE are the mean across origins; the value in parentheses is the MAE standard deviation across origins, i.e. how much the error swings from window to window. Lower is better on every column.
 
-**HistGradientBoosting** has the lowest error, cutting MAE by **48.9%** against the seasonal-naive baseline (1,984 vs 3,880 MW). The baseline is the honest yardstick: a model that cannot beat "same hour yesterday, last week as fallback" is not earning its complexity.
+**HistGradientBoosting** has the lowest error, cutting MAE by **50.4%** against the seasonal-naive baseline (1,931 vs 3,892 MW). The baseline is the honest yardstick: a model that cannot beat "same hour yesterday, last week as fallback" is not earning its complexity.
 
 ### Is the win statistically significant?
 
 | Comparison | Mean per-origin MAE gap (MW) | 95% CI | Wilcoxon p | DM p |
 |---|---|---|---|---|
-| HistGradientBoosting − Seasonal naive | -1,896 | [-2,242, -1,550] | 7.28e-21 | 4.26e-27 |
-| HistGradientBoosting − SARIMAX | -1,329 | [-1,622, -1,039] | 5.36e-17 | 2.06e-20 |
+| HistGradientBoosting − Seasonal naive | -1,961 | [-2,312, -1,625] | 3.72e-21 | 6.01e-29 |
+| HistGradientBoosting − SARIMAX | -1,395 | [-1,695, -1,108] | 5.28e-17 | 2.86e-22 |
 
 Per-origin MAE across the 329 paired origins is the sampling unit: hours inside one 24-hour window share weather and demand level, so treating them as independent would overstate confidence. The CI is a paired bootstrap (10,000 resamples) on the mean difference; negative means the champion errs less. The Diebold-Mariano column tests the same claim on hourly losses with a Harvey-Leybourne-Newbold correction for 24-step serial dependence. The gap is statistically significant against both rivals, not sampling noise.
 
-**Interval coverage:** mean per-origin coverage is 92.9% (95% CI [91.3%, 94.4%]) against the 95% nominal target across 326 origins — below the nominal target by a margin the data can resolve (p = 7.53e-03). Per-origin rates are the unit here for the same reason.
+**Interval coverage:** mean per-origin coverage is 93.1% (95% CI [91.5%, 94.6%]) against the 95% nominal target across 326 origins — below the nominal target by a margin the data can resolve (p = 1.47e-02). Per-origin rates are the unit here for the same reason.
 
-**Holiday penalty:** public-holiday hours cost 2,750 MW more absolute error than ordinary hours (95% CI [2,176, 3,345], permutation p = 2.00e-04, Cohen's d = 1.27) over 216 holiday hours against 7,680 ordinary ones. This is the clearest weakness in the champion and the first place to spend more feature work.
+**Holiday penalty:** public-holiday hours cost 2,630 MW more absolute error than ordinary hours (95% CI [2,040, 3,228], permutation p = 2.00e-04, Cohen's d = 1.31) over 168 holiday hours against 7,728 ordinary ones. This is the clearest weakness in the champion and the first place to spend more feature work.
 
 ## Prediction-interval coverage
 
-The shipped interval is HistGradientBoosting's forecast ± the 95th percentile of absolute residuals from *earlier* origins (the same recipe the service uses). Walking that band forward across 7,824 scored hours, **92.9%** of observed values land inside it against a 95% nominal target, at a mean band width of 11,467 MW. This is an empirical magnitude band, not a calibrated probabilistic interval.
+The shipped interval is HistGradientBoosting's forecast ± the 95th percentile of absolute residuals from *earlier* origins (the same recipe the service uses). Walking that band forward across 7,824 scored hours, **93.1%** of observed values land inside it against a 95% nominal target, at a mean band width of 10,806 MW. This is an empirical magnitude band, not a calibrated probabilistic interval.
 
 ## What HistGradientBoosting relies on
 
 ![Permutation importance](figures/benchmark_feature_importance.png)
 
-Permutation importance on a held-out trailing validation week: each bar is how much the validation MAE rises when that column is shuffled. The three that matter most are `lag_1h` (9,443 MW), `hour` (1,749 MW), `lag_168h` (79 MW).
+Permutation importance on a held-out trailing validation week: each bar is how much the validation MAE rises when that column is shuffled. The three that matter most are `lag_1h` (8,820 MW), `hour` (1,803 MW), `weekday` (117 MW).
 
 ## Error at each origin
 
@@ -49,7 +49,7 @@ Per-origin MAE over the whole backtest. A model is only trustworthy if it wins c
 
 ![Champion error slices](figures/benchmark_error_slices.png)
 
-MAE for HistGradientBoosting broken down by local hour, weekday, calendar month, and German public-holiday status. The largest hourly error falls at hour 15 (Europe/Berlin). On public holidays the champion's MAE is 4,659 MW versus 1,909 MW on ordinary days.
+MAE for HistGradientBoosting broken down by local hour, weekday, calendar month, and German public-holiday status. The largest hourly error falls at hour 15 (Europe/Berlin). On public holidays the champion's MAE is 4,504 MW versus 1,875 MW on ordinary days.
 
 ## Model configuration
 
