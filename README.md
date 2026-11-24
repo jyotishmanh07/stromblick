@@ -9,7 +9,7 @@ Live dashboard: [stromblick.streamlit.app](https://stromblick.streamlit.app/)
 Stromblick forecasts German electricity demand for the next 24 hours and flags hours where demand was unusually high or low. Germany's grid is getting harder to plan for. More of the supply depends on the weather, and heat pumps and electric cars keep changing the shape of demand. A bad forecast costs real money: balancing parties pay for every MW they miss, and grid operators hold reserve capacity sized to the expected error.
 
 - **Data:** hourly total grid load for Germany from SMARD, the Bundesnetzagentur's public electricity market platform. Three years of history, refreshed every week; the forecaster trains on the latest two.
-- **Tools:** Python (pandas, scikit-learn, statsmodels), DuckDB for the SQL reporting layer, FastAPI, Streamlit, Docker, and GitHub Actions for the scheduled jobs.
+- **Tools:** Python (pandas, scikit-learn, statsmodels), PostgreSQL for the SQL reporting layer, FastAPI, Streamlit, Docker, and GitHub Actions for the scheduled jobs.
 - **What I do with it:** ingest and validate the data, build features that can't leak the future, compare three forecasting models with a walk-forward backtest, publish one forecast a day to a log in git, and watch the model for drift.
 - **Result:** the gradient-boosted model roughly halves the error of the "same hour yesterday" baseline, and that gap is statistically significant. Against the grid operators' own day-ahead forecast it's a statistical tie with the data I can actually get, but averaging the two beats the operators on their own. Public holidays are its weakest spot. Current numbers are under [Results](#results).
 
@@ -37,8 +37,8 @@ flowchart LR
     Bench --> Reports[reports/ + README blocks]
     Bench --> History[(reports/history)]
     History --> Drift[drift monitor]
-    Clean --> DuckDB[(DuckDB warehouse)]
-    DuckDB --> EDA[EDA report]
+    Clean --> Postgres[(PostgreSQL warehouse)]
+    Postgres --> EDA[EDA report]
     Models --> Service[ForecastService]
     Service --> API[FastAPI]
     Service --> Dash[Streamlit dashboard]
@@ -94,7 +94,7 @@ Not much, which is fine for this problem:
 - That's about 900 KB as CSV, and about 2 MB of raw JSON from SMARD
 - SMARD's full archive goes back to 2015: about 104,000 hours, which the [training-window study](reports/window_study.md) uses
 
-The daily forecast log adds 24 rows a day, under 9,000 rows a year. Everything fits in memory many times over, so a pandas-and-DuckDB stack is plenty and anything distributed would be overkill.
+The daily forecast log adds 24 rows a day, under 9,000 rows a year. Everything fits in memory many times over, so pandas plus a single PostgreSQL instance is plenty and anything distributed would be overkill.
 
 The size that actually matters is the backtest: a year of daily origins, each refitting three models, takes about 45 minutes. SARIMAX is most of that, which is why it trains on one year while the main model trains on two. That's what sets how often the full benchmark can run.
 
@@ -152,9 +152,9 @@ There isn't one. Data arrives once a week in a batch, and the dashboard pulls wh
 ## Storage
 
 - **Files in git:** the clean demand CSV, its `metadata.json`, and the forecast log. They're committed on purpose: the hosted dashboard needs real data, and a forecast log is only worth something if nobody can quietly edit it. Raw SMARD payloads stay out of git and can be rebuilt by re-running the ingest.
-- **DuckDB** ([warehouse.py](src/energy_forecast/warehouse.py), [sql/](sql/)): a reporting warehouse with `fact_demand`, `dim_calendar` and `fact_forecast`. The calendar table is built from the same holiday and DST helpers the model uses, so SQL and features can't disagree on what counts as a holiday. [tests/test_warehouse.py](tests/test_warehouse.py) checks every query against a pandas equivalent. The `.duckdb` file is gitignored and rebuilt when needed.
+- **PostgreSQL** ([warehouse.py](src/energy_forecast/warehouse.py), [sql/](sql/)): a reporting warehouse with `fact_demand`, `dim_calendar` and `fact_forecast`. The calendar table is built from the same holiday and DST helpers the model uses, so SQL and features can't disagree on what counts as a holiday. [tests/test_warehouse.py](tests/test_warehouse.py) checks every query against a pandas equivalent. Every table is rebuilt from the snapshot, so the database holds nothing that can't be regenerated.
 
-I chose DuckDB over Postgres because it's a single file with no server, and over a cloud warehouse because the data is tiny and the budget is zero. Ingestion doesn't go through the warehouse. `canonicalize_demand()` stays the only path in.
+I picked PostgreSQL because it's what most teams already run, and it handles this data size easily. A column store like DuckDB would be the better fit for analytics at scale, and a cloud warehouse would be overkill for data this small on a zero budget. Locally it runs from `docker compose up -d postgres`; in CI it's a service container. Ingestion doesn't go through the warehouse. `canonicalize_demand()` stays the only path in.
 
 There are no model files. Every forecast refits from scratch (about half a second), so nothing is ever pickled and a stale model file can't exist.
 
@@ -312,12 +312,13 @@ The gradient-boosted model clearly beats both baselines, and the significance te
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+docker compose up -d postgres                # warehouse tests skip without it
 pytest -q
 uvicorn energy_forecast.api:app --reload    # API on :8000
 streamlit run app/streamlit_app.py           # dashboard on :8501
 ```
 
-Or both services with Docker:
+Or everything (API, dashboard and the warehouse database) with Docker:
 
 ```bash
 docker compose up --build

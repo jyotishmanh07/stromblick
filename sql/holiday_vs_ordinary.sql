@@ -4,7 +4,7 @@ SELECT
     CASE WHEN c.is_public_holiday = 1 THEN 'Public holiday' ELSE 'Ordinary day' END AS day_class,
     count(*)              AS hours,
     avg(d.demand_mw)      AS mean_demand_mw,
-    median(d.demand_mw)   AS median_demand_mw,
+    percentile_cont(0.5) WITHIN GROUP (ORDER BY d.demand_mw) AS median_demand_mw,
     min(d.demand_mw)      AS min_demand_mw,
     max(d.demand_mw)      AS max_demand_mw
 FROM fact_demand d

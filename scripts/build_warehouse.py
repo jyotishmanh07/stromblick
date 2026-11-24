@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Load the clean SMARD snapshot into the DuckDB reporting warehouse.
+"""Load the clean SMARD snapshot into the PostgreSQL reporting warehouse.
 
 Run after ingestion, and again after scripts/benchmark.py if you want the
-forecast fact table populated:
+forecast fact table populated. Needs a running Postgres (`docker compose up -d postgres`,
+or any server named by DATABASE_URL):
 
     PYTHONPATH=src python scripts/build_warehouse.py
 """
@@ -15,14 +16,13 @@ from pathlib import Path
 import pandas as pd
 
 from energy_forecast.data import load_clean_demand
-from energy_forecast.warehouse import DEFAULT_DB_PATH, build_warehouse, query
+from energy_forecast.warehouse import build_warehouse, query
 
 POOLED_PATH = Path("reports/benchmark_pooled_hourly.csv")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument(
         "--skip-forecasts", action="store_true",
         help="build only fact_demand and dim_calendar, ignoring the benchmark output",
@@ -34,17 +34,17 @@ def main() -> None:
     if not args.skip_forecasts and POOLED_PATH.exists():
         forecasts = pd.read_csv(POOLED_PATH, parse_dates=["origin", "timestamp"])
 
-    path = build_warehouse(demand, args.db_path, forecasts)
+    target = build_warehouse(demand, forecasts=forecasts)
     counts = query(
         "SELECT 'fact_demand' AS table_name, count(*) AS rows FROM fact_demand "
         "UNION ALL SELECT 'dim_calendar', count(*) FROM dim_calendar "
         "UNION ALL SELECT 'fact_forecast', count(*) FROM fact_forecast",
-        path,
+        target,
     )
-    print(f"Wrote {path}")
+    print(f"Wrote schema {target.schema!r}")
     print(counts.to_string(index=False))
     if forecasts is None:
-        print(f"\nfact_forecast is empty — run scripts/benchmark.py to produce {POOLED_PATH}.")
+        print(f"\nfact_forecast is empty: run scripts/benchmark.py to produce {POOLED_PATH}.")
 
 
 if __name__ == "__main__":

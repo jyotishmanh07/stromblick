@@ -2,7 +2,7 @@
 
 Snapshot: `2023-11-26 23:00:00+00:00` to `2026-11-23 09:00:00+00:00` (26,219 hourly rows). Source: Bundesnetzagentur | SMARD.de, module 410 (Germany actual total grid load), CC BY 4.0.
 
-Every figure below is a SQL aggregation over the DuckDB warehouse built from that snapshot (`sql/`, rebuilt by `scripts/build_warehouse.py`).
+Every figure below is a SQL aggregation over the PostgreSQL warehouse built from that snapshot (`sql/`, rebuilt by `scripts/build_warehouse.py`).
 
 - Mean demand: 53,205 MW
 - Peak: 78,241 MW; trough: 32,413 MW

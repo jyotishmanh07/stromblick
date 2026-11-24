@@ -7,7 +7,7 @@ WITH scored AS (
         abs(f.demand_mw - f.predicted) AS absolute_error
     FROM fact_forecast f
     JOIN dim_calendar c USING (timestamp)
-    WHERE f.model = ? AND f.demand_mw IS NOT NULL
+    WHERE f.model = :model AND f.demand_mw IS NOT NULL
 )
 SELECT 'hour'    AS slice, CAST(hour AS VARCHAR) AS bucket,
        avg(absolute_error) AS absolute_error, count(*) AS hours,

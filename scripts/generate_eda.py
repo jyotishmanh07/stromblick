@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate EDA figures and a markdown report from the clean SMARD dataset.
 
-Every aggregation is a SQL query against the DuckDB warehouse (see sql/), which is
+Every aggregation is a SQL query against the PostgreSQL warehouse (see sql/), which is
 rebuilt here from the canonical frame so the report can never read a stale snapshot.
 The calendar dimension is materialised from the same helpers the model features use,
 so a SQL slice and a model feature agree by construction. Pandas is used only to
@@ -23,7 +23,7 @@ from energy_forecast.data import load_clean_demand
 from energy_forecast.theme import BLUE, INK, ORANGE
 from energy_forecast.theme import GREEN as AQUA
 from energy_forecast.theme import style_axes as _style_axes
-from energy_forecast.warehouse import DEFAULT_DB_PATH, build_warehouse, query
+from energy_forecast.warehouse import build_warehouse, query
 
 FIG_DIR = Path("reports/figures")
 REPORT_PATH = Path("reports/eda.md")
@@ -73,7 +73,7 @@ def plot_bars(labels: list[str], values: list[float], title: str, out: Path, rot
 def main() -> None:
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     frame = load_clean_demand()
-    db = build_warehouse(frame, DEFAULT_DB_PATH)
+    db = build_warehouse(frame)
 
     profile = query("daily_profile_by_daytype", db)
     weekday = query("weekly_pattern", db)
@@ -82,7 +82,7 @@ def main() -> None:
     holiday = query("holiday_vs_ordinary", db)
     stats = query(
         "SELECT count(*) AS rows, avg(demand_mw) AS mean, max(demand_mw) AS peak, "
-        "min(demand_mw) AS trough, min(timestamp) AS start, max(timestamp) AS end "
+        "min(demand_mw) AS trough "
         "FROM fact_demand WHERE demand_mw IS NOT NULL",
         db,
     ).iloc[0]
@@ -111,7 +111,7 @@ def main() -> None:
         f"({len(frame):,} hourly rows). Source: Bundesnetzagentur | SMARD.de, module 410 "
         "(Germany actual total grid load), CC BY 4.0.",
         "",
-        "Every figure below is a SQL aggregation over the DuckDB warehouse built from that "
+        "Every figure below is a SQL aggregation over the PostgreSQL warehouse built from that "
         "snapshot (`sql/`, rebuilt by `scripts/build_warehouse.py`).",
         "",
         f"- Mean demand: {stats['mean']:,.0f} MW",

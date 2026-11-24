@@ -9,6 +9,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stromblick
+          POSTGRES_PASSWORD: stromblick
+          POSTGRES_DB: stromblick
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stromblick"
+          --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      # The warehouse tests skip without a database locally; here they must run.
+      REQUIRE_POSTGRES: "1"
     strategy:
       matrix:
         python-version: ["3.10", "3.11"]

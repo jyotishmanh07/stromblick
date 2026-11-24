@@ -4,7 +4,7 @@ WITH bounds AS (
     SELECT min(timestamp) AS lo, max(timestamp) AS hi FROM fact_demand
 ),
 expected AS (
-    SELECT unnest(generate_series(lo, hi, INTERVAL 1 HOUR)) AS timestamp
+    SELECT generate_series(lo, hi, INTERVAL '1 hour') AS timestamp
     FROM bounds
 )
 SELECT

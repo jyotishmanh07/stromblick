@@ -894,7 +894,7 @@ with about_tab:
         "- **Tested claims.** The champion's margin over each rival carries a paired bootstrap "
         "CI and a Wilcoxon/Diebold-Mariano p-value, computed per origin because hours inside "
         "one 24-hour window are correlated.\n"
-        "- **SQL reporting layer.** EDA aggregations and error slices run against a DuckDB "
+        "- **SQL reporting layer.** EDA aggregations and error slices run against a PostgreSQL "
         "warehouse (`fact_demand`, `dim_calendar`, `fact_forecast`) built from the same "
         "snapshot; each query is tested against its pandas equivalent."
     )
