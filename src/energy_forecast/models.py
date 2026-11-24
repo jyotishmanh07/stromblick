@@ -14,6 +14,24 @@ except (ImportError, OSError, TypeError, ValueError):
 
 from .features import FEATURE_COLUMNS, add_features, feature_row
 
+# The generation label on every ForecastOutput, the forecast log and the benchmark run
+# history. Bump it when DEFAULT_PARAMS, FEATURE_COLUMNS or a training window changes.
+# v2 (2026-11): the champion trains on a trailing two years instead of the 52-week
+# snapshot; see reports/window_study.md.
+MODEL_VERSION = "v2"
+
+
+def trailing_window(frame: pd.DataFrame, days: int | None) -> pd.DataFrame:
+    """Rows within `days` of the frame's last timestamp; None keeps everything.
+
+    Time based, never positional: interior NaN rows and the live merge make row counts
+    and hours diverge.
+    """
+    if days is None or frame.empty:
+        return frame
+    timestamps = pd.to_datetime(frame.timestamp, utc=True)
+    return frame[timestamps > timestamps.max() - pd.Timedelta(days=days)]
+
 
 def _timestamps(values: pd.Series | pd.DataFrame | pd.DatetimeIndex) -> pd.DatetimeIndex:
     if isinstance(values, pd.DataFrame):
@@ -48,10 +66,15 @@ class SeasonalNaive:
 class SARIMAXBaseline:
     name = "sarimax"
 
+    # A cost cap, not a tuned choice: one fit is ~6.5 s on a year of hourly data and
+    # ~17 s on two, so a longer window would make the yearly backtest run for hours.
+    # Under the 52-week snapshot the baseline saw at most a year anyway.
+    TRAIN_WINDOW_DAYS = 365
+
     def fit(self, frame: pd.DataFrame) -> "SARIMAXBaseline":
         from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-        data = frame.copy()
+        data = trailing_window(frame, self.TRAIN_WINDOW_DAYS).copy()
         data["timestamp"] = pd.to_datetime(data.timestamp, utc=True)
         self.series = data.set_index("timestamp")["demand_mw"].sort_index().asfreq("1h")
         self.fallback = SeasonalNaive().fit(frame)
@@ -85,14 +108,24 @@ class HistGradientBoostingForecast:
         "max_iter": 250, "learning_rate": 0.06, "max_leaf_nodes": 31, "l2_regularization": 1.0,
     }
 
-    def __init__(self, random_state: int = 42, **params) -> None:
+    # Two years, chosen by scripts/window_study.py under a rule fixed before the run (CI
+    # entirely below zero and Holm-adjusted p < 0.05 against one year). Most of the gain
+    # is in winter; see reports/window_study.md before changing it.
+    DEFAULT_TRAIN_WINDOW_DAYS: int | None = 730
+
+    def __init__(
+        self, random_state: int = 42,
+        train_window_days: int | None = DEFAULT_TRAIN_WINDOW_DAYS, **params,
+    ) -> None:
         self.params = {**self.DEFAULT_PARAMS, **params}
         self.random_state = random_state
+        self.train_window_days = train_window_days
         self.regressor = HistGradientBoostingRegressor(
             random_state=random_state, **self.params
         ) if HistGradientBoostingRegressor is not None else None
 
     def fit(self, frame: pd.DataFrame) -> "HistGradientBoostingForecast":
+        frame = trailing_window(frame, self.train_window_days)
         features = add_features(frame).dropna(subset=FEATURE_COLUMNS + ["demand_mw"])
         if len(features) < 200:
             raise ValueError("at least 200 complete hourly observations are required")
@@ -159,4 +192,6 @@ def forecast_with_interval(
         spread = float(np.quantile(np.abs(residuals), residual_quantile))
     else:
         spread = float(np.std(history.demand_mw) * 0.15)
-    return ForecastOutput(timestamps, prediction, prediction - spread, prediction + spread, "v1")
+    return ForecastOutput(
+        timestamps, prediction, prediction - spread, prediction + spread, MODEL_VERSION
+    )

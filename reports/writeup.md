@@ -111,7 +111,7 @@ The more interesting result is a negative one. On the *anomaly-day* target, a lo
 
 ```bash
 pip install -e ".[dev]"
-PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52   # collect + validate
+PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 157   # collect + validate
 PYTHONPATH=src python scripts/build_warehouse.py               # DuckDB reporting layer
 PYTHONPATH=src python scripts/generate_eda.py                  # eda.md
 PYTHONPATH=src python scripts/benchmark.py                     # benchmark.md (~20 min)

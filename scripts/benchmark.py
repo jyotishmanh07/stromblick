@@ -31,6 +31,7 @@ from energy_forecast.inference import (
     slice_difference_test,
 )
 from energy_forecast.models import (
+    MODEL_VERSION,
     HistGradientBoostingForecast,
     SARIMAXBaseline,
     SeasonalNaive,
@@ -47,10 +48,9 @@ POOLED_PATH = Path("reports/benchmark_pooled_hourly.csv")
 SUMMARY_PATH = Path("reports/benchmark_summary.json")
 TUNING_SUMMARY_PATH = Path("reports/tuning_summary.json")
 
-# The generation label the forecast log also records (models.py:162 returns it on every
-# ForecastOutput). Bump it there and here together, or the run history and the forecast log
-# stop being cross-referenceable. `params_hash` catches an *unannounced* change on its own.
-MODEL_VERSION = "v1"
+# MODEL_VERSION (imported from models.py) is the generation label the forecast log also
+# records, so the run history and the log stay cross-referenceable. `params_hash` catches
+# an *unannounced* change on its own.
 
 MODEL_FACTORIES = {
     "Seasonal naive": SeasonalNaive,
@@ -60,15 +60,34 @@ MODEL_FACTORIES = {
 WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
+def train_windows_text() -> str:
+    """How much history each model trains on, read off the classes so prose can't drift."""
+    gbm_days = HistGradientBoostingForecast.DEFAULT_TRAIN_WINDOW_DAYS
+    gbm = "all available history" if gbm_days is None else f"the trailing {gbm_days // 365} years"
+    sarimax = SARIMAXBaseline.TRAIN_WINDOW_DAYS // 365
+    return (
+        f"HistGradientBoosting on {gbm}, SARIMAX on the trailing "
+        f"{sarimax} year{'s' if sarimax != 1 else ''}"
+    )
+
+
 def walk_forward(
     frame: pd.DataFrame, initial_train_hours: int, horizon_hours: int, step_hours: int,
-    max_origins: int | None,
+    max_origins: int | None, eval_hours: int | None = None,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    """Return per-origin metrics and pooled per-hour predictions for every model."""
+    """Return per-origin metrics and pooled per-hour predictions for every model.
+
+    With `eval_hours`, origins cover only the latest `eval_hours` of the snapshot, so every
+    origin trains on the history the shipped model actually uses rather than on a short
+    warm-up. `initial_train_hours` still guards a snapshot too short for that.
+    """
     data = frame.copy()
     data["timestamp"] = pd.to_datetime(data.timestamp, utc=True)
     data = data.sort_values("timestamp").reset_index(drop=True)
-    origins = list(range(initial_train_hours, len(data) - horizon_hours + 1, step_hours))
+    start = initial_train_hours
+    if eval_hours is not None:
+        start = max(start, len(data) - horizon_hours - eval_hours)
+    origins = list(range(start, len(data) - horizon_hours + 1, step_hours))
     if max_origins is not None:
         origins = origins[:max_origins]
     per_origin: list[dict[str, object]] = []
@@ -439,7 +458,9 @@ def record_history(
     # consecutive preceding runs above the threshold, so a ledger that already contained
     # this run would let the run confirm itself.
     runs = drift.load_run_history(drift.RUN_HISTORY_PATH)
-    verdict = drift.regression_verdict(scores, runs)
+    verdict = drift.regression_verdict(
+        drift.current_generation(scores, params_hash), drift.current_generation(runs, params_hash)
+    )
 
     record = drift.run_record_from_summary(
         summary, run_at=run_at, verdict=verdict, params_hash=params_hash,
@@ -485,6 +506,17 @@ def seed_history() -> int:
             f"(need {drift.MIN_COMPLETE_ORIGINS}). Re-run the full benchmark uncapped."
         )
         return 1
+    # record_history stamps rows with the *shipped* fingerprint, so artifacts from another
+    # model generation (or from before summaries carried one) would be recorded as this
+    # generation's scores. Refuse rather than mislabel.
+    current = drift.params_fingerprint()
+    if summary.get("params_hash") != current:
+        print(
+            f"Cannot seed history: {SUMMARY_PATH} was written by model generation "
+            f"{summary.get('params_hash', 'unknown (no params_hash recorded)')}, the shipped "
+            f"generation is {current}. Re-run the full benchmark."
+        )
+        return 1
 
     print(f"Seeding history from {SUMMARY_PATH} and {METRICS_PATH} ({origins_used} origins) ...")
     record_history(per_origin, summary, origins_used, None)
@@ -493,7 +525,14 @@ def seed_history() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--initial-train-days", type=int, default=28)
+    parser.add_argument(
+        "--initial-train-days", type=int, default=28,
+        help="minimum history before the first origin (guards a short snapshot)",
+    )
+    parser.add_argument(
+        "--eval-days", type=int, default=365,
+        help="score only the latest N days of origins; each trains on everything before it",
+    )
     parser.add_argument("--horizon-hours", type=int, default=24)
     parser.add_argument(
         "--step-hours", type=int, default=24,
@@ -525,7 +564,8 @@ def main() -> int:
 
     print(f"Backtesting {len(frame):,} rows, step {args.step_hours}h ...", flush=True)
     per_origin, pooled = walk_forward(
-        frame, initial_train_hours, args.horizon_hours, args.step_hours, args.max_origins
+        frame, initial_train_hours, args.horizon_hours, args.step_hours, args.max_origins,
+        eval_hours=args.eval_days * 24,
     )
 
     summary = (
@@ -656,10 +696,10 @@ def main() -> int:
         f"({len(frame):,} hourly rows). Source: Bundesnetzagentur | SMARD.de, module 410 "
         "(Germany actual total grid load), CC BY 4.0.",
         "",
-        f"Rolling-origin backtest: **{origins_used} origins** spaced {args.step_hours}h apart, "
-        f"the first after {args.initial_train_days} days of history. Each origin trains on all "
-        f"data up to that point and is scored on the next {args.horizon_hours} hours; every model "
-        f"is refit at every origin. Evaluation spans `{test_start}` to `{test_end}` "
+        f"Rolling-origin backtest: **{origins_used} origins** spaced {args.step_hours}h apart "
+        f"over the latest {args.eval_days} days. Each origin trains on data up to that point "
+        f"({train_windows_text()}) and is scored on the next {args.horizon_hours} hours; every "
+        f"model is refit at every origin. Evaluation spans `{test_start}` to `{test_end}` "
         f"({eval_hours:,} forecast hours). No random split is used, and every feature lag is "
         "shifted so no training row can see its own or a future value.",
         "",
@@ -731,6 +771,8 @@ def main() -> int:
         "eval_end": str(test_end),
         "eval_hours": int(eval_hours),
         "champion": champion,
+        "model_version": MODEL_VERSION,
+        "params_hash": drift.params_fingerprint(),
         "lift_vs_seasonal_naive_pct": round(float(lift), 1),
         "models": {
             name: {
@@ -763,7 +805,7 @@ def main() -> int:
     worst = max(tests["comparisons"].values(), key=lambda s: s["mean_diff"])
     synced = sync_readme_results(
         table,
-        f"{origins_used} daily origins, first after {args.initial_train_days} days of history, "
+        f"{origins_used} daily origins over the latest year ({train_windows_text()}), "
         f"each scored on the next {args.horizon_hours} hours ({eval_hours:,} forecast hours, "
         f"{test_start:%b %Y} – {test_end:%b %Y}):",
         f"Paired bootstrap over the {worst['n']} origins puts the champion's MAE advantage at "

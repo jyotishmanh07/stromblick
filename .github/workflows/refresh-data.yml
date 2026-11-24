@@ -10,7 +10,7 @@ on:
     inputs:
       weeks:
         description: "Number of weekly SMARD chunks to fetch"
-        default: "52"
+        default: "157"
       commit:
         description: "Commit the refreshed snapshot and reports"
         type: boolean
@@ -45,7 +45,7 @@ jobs:
       # The gate runs inside download(); a hard failure raises DataValidationError and
       # fails the job here, before anything is committed.
       - name: Ingest and validate
-        run: PYTHONPATH=src python scripts/ingest_smard_api.py --weeks ${{ inputs.weeks || '52' }}
+        run: PYTHONPATH=src python scripts/ingest_smard_api.py --weeks ${{ inputs.weeks || '157' }}
 
       - name: Regenerate reports
         run: |

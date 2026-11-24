@@ -44,4 +44,4 @@ def test_forecast_record_issues_from_last_observed(tmp_path):
     assert len(record) == 24
     assert (record.origin == service.last_observed).all()
     assert record.timestamp.iloc[0] == service.last_observed + pd.Timedelta(hours=1)
-    assert (record.model_version == "v1").all()
+    assert (record.model_version == "v2").all()

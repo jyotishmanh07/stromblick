@@ -133,3 +133,48 @@ def test_interval_falls_back_to_a_share_of_demand_spread_without_residuals():
     np.testing.assert_allclose(
         output.upper_bound - output.lower_bound, 2 * 0.15 * np.std(data.demand_mw)
     )
+
+
+def test_trailing_window_keeps_only_the_last_n_days_by_time():
+    # Ten missing hours inside the window: a positional "last 72 rows" cut would reach
+    # back past three days to make up the count; a time-based cut keeps 62 rows.
+    data = _ramp(24 * 10).drop(index=range(200, 210))
+    kept = models.trailing_window(data, 3)
+    assert kept.timestamp.min() > data.timestamp.max() - pd.Timedelta(days=3)
+    assert len(kept) == 24 * 3 - 10
+
+
+def test_trailing_window_none_keeps_everything():
+    data = _ramp(100)
+    assert len(models.trailing_window(data, None)) == 100
+
+
+def test_gradient_boosting_trains_only_on_its_window():
+    data = demo_demand(hours=24 * 60)
+    model = HistGradientBoostingForecast(train_window_days=20).fit(data)
+    assert model.history.index.min() > data.timestamp.max() - pd.Timedelta(days=20)
+
+
+def test_gradient_boosting_without_a_window_sees_all_history():
+    data = demo_demand(hours=24 * 60)
+    model = HistGradientBoostingForecast(train_window_days=None).fit(data)
+    assert model.history.index.min() == data.timestamp.min()
+
+
+def test_sarimax_fits_on_at_most_its_window():
+    data = _ramp(24 * 30)
+    original = SARIMAXBaseline.TRAIN_WINDOW_DAYS
+    try:
+        SARIMAXBaseline.TRAIN_WINDOW_DAYS = 7
+        model = SARIMAXBaseline().fit(data)
+    finally:
+        SARIMAXBaseline.TRAIN_WINDOW_DAYS = original
+    assert len(model.series) == 24 * 7
+
+
+def test_forecast_output_carries_the_shipped_model_version():
+    data = demo_demand(hours=24 * 30)
+    output = forecast_with_interval(
+        HistGradientBoostingForecast(), data, data.timestamp.max(), horizon_hours=3
+    )
+    assert output.model_version == models.MODEL_VERSION

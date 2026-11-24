@@ -225,3 +225,31 @@ def test_run_record_from_summary_reads_the_shipped_summary():
     record = drift.run_record_from_summary(json.loads(path.read_text()))
     assert set(drift.RUN_COLUMNS) <= set(record)
     assert np.isfinite(record["champion_mae_mean"])
+
+
+def test_fingerprint_changes_with_the_training_window():
+    assert drift.params_fingerprint(train_window_days=365) != drift.params_fingerprint(
+        train_window_days=730
+    )
+    assert drift.params_fingerprint() == drift.params_fingerprint(
+        train_window_days=drift.HistGradientBoostingForecast.DEFAULT_TRAIN_WINDOW_DAYS
+    )
+
+
+def test_current_generation_drops_rows_from_other_generations():
+    scores = pd.concat(
+        [_scores(days=30, params_hash="oldgen00"), _scores(days=30, params_hash="newgen00")]
+    )
+    kept = drift.current_generation(scores, "newgen00")
+    assert set(kept.params_hash) == {"newgen00"}
+    assert len(kept) == len(scores) // 2
+
+
+def test_a_new_generation_is_not_ranked_against_the_old_ones_errors():
+    old = _scores(days=400, params_hash="oldgen00")
+    old["mae"] = 500.0  # a much better old generation would make the new one look regressed
+    new = _scores(days=400, params_hash="newgen00")
+    verdict = drift.regression_verdict(drift.current_generation(pd.concat([old, new]), "newgen00"))
+    pooled = drift.regression_verdict(pd.concat([old, new]))
+    assert verdict.reference_median > 500.0
+    assert pooled.reference_median != verdict.reference_median

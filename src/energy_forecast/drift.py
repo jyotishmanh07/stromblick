@@ -130,21 +130,46 @@ class Verdict:
     consecutive_runs: int = 0
 
 
-def params_fingerprint(
-    params: dict | None = None, features: list[str] | None = None
-) -> str:
-    """8-char hash identifying a *model generation* (defaults plus feature contract).
+_DEFAULT = object()  # "use the shipped value", distinct from an explicit None window
 
-    Feature order is not part of the identity: `fit` and `predict` both index by
-    `FEATURE_COLUMNS`, so a reorder is the same model.
+
+def params_fingerprint(
+    params: dict | None = None, features: list[str] | None = None,
+    train_window_days=_DEFAULT,
+) -> str:
+    """8-char hash identifying a *model generation*: defaults, feature contract and
+    training window.
+
+    The window is part of the identity because the same parameters trained on one year
+    and on two are measurably different models (reports/window_study.md). Feature order
+    is not: `fit` and `predict` both index by `FEATURE_COLUMNS`, so a reorder is the same
+    model.
     """
     params = HistGradientBoostingForecast.DEFAULT_PARAMS if params is None else params
     features = FEATURE_COLUMNS if features is None else features
+    if train_window_days is _DEFAULT:
+        train_window_days = HistGradientBoostingForecast.DEFAULT_TRAIN_WINDOW_DAYS
     canonical = json.dumps(
-        {"params": {k: params[k] for k in sorted(params)}, "features": sorted(features)},
+        {
+            "params": {k: params[k] for k in sorted(params)}, "features": sorted(features),
+            "train_window_days": train_window_days,
+        },
         sort_keys=True, separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
+
+
+def current_generation(frame: pd.DataFrame | None, params_hash: str | None = None):
+    """Only the rows scored by one model generation (the shipped one by default).
+
+    Every verdict must compare a generation with itself. Rows from an older generation
+    stay in the history files as the record of what it scored; they just never enter a
+    reference, a recent window, the consecutive-run count or the coverage baseline.
+    """
+    if frame is None or len(frame) == 0 or "params_hash" not in frame:
+        return frame
+    params_hash = params_fingerprint() if params_hash is None else params_hash
+    return frame[frame.params_hash.astype(str) == params_hash].reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------- history
@@ -260,7 +285,7 @@ def append_origin_history(
     merged["origin"] = pd.to_datetime(merged.origin, utc=True)
     merged["first_seen"] = pd.to_datetime(merged.first_seen, utc=True)
     # keep="first" is deliberate. A rerun of an already-recorded origin trains on a
-    # front-truncated prefix -- `--weeks 52` makes the snapshot a rolling window -- so it
+    # front-truncated prefix -- `--weeks` makes the snapshot a rolling window -- so it
     # is a slightly different model, not a better measurement of the same one. The first
     # reading is the one taken under the conditions the row claims to describe.
     merged = (

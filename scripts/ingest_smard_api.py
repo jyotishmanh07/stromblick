@@ -7,7 +7,11 @@ from energy_forecast.quality import validate_demand
 from energy_forecast.smard_api import SMARDAPIClient
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--weeks", type=int, default=52, help="number of latest weekly chunks")
+parser.add_argument(
+    "--weeks", type=int, default=157,
+    help="number of latest weekly chunks; 157 (three years) gives the two-year training "
+    "window a full year of backtest origins",
+)
 args = parser.parse_args()
 if args.weeks < 1:
     parser.error("--weeks must be positive")

@@ -435,12 +435,27 @@ with quality_tab:
     drift_state = drift_history(
         file_stamp(drift.RUN_HISTORY_PATH), file_stamp(drift.ORIGIN_HISTORY_PATH)
     )
+    # Every verdict compares the shipped model generation with itself; rows scored by an
+    # older generation stay on disk as its record but never enter a comparison.
+    new_generation = False
+    if drift_state is not None:
+        runs, scores = (drift.current_generation(frame) for frame in drift_state)
+        new_generation = scores.empty
+        drift_state = None if new_generation else (runs, scores)
     if drift_state is None:
-        st.info(
-            "No run history yet. `scripts/benchmark.py` appends one row per complete run; the "
-            "weekly refresh writes the first. Seed it now from the artifacts already in "
-            "`reports/` with `PYTHONPATH=src python scripts/benchmark.py --seed-history`."
-        )
+        if new_generation:
+            st.info(
+                "The shipped model is a new generation with no scored runs of its own yet. "
+                "The weekly refresh writes its first year of origins, and the verdict "
+                "returns with it."
+            )
+        else:
+            st.info(
+                "No run history yet. `scripts/benchmark.py` appends one row per complete "
+                "run; the weekly refresh writes the first. Seed it now from the artifacts "
+                "already in `reports/` with "
+                "`PYTHONPATH=src python scripts/benchmark.py --seed-history`."
+            )
         # Never leave the panel blank: the replayed week is a reading the app can always
         # take, and `live_verdict` caps it at "watch" because 7 origins is too few to condemn.
         live = drift.live_verdict(
@@ -504,18 +519,6 @@ with quality_tab:
             )
         else:
             reference = scores.iloc[:0]
-
-        # A window scored by a different model generation is not comparable to a reference
-        # scored by the old one; say so rather than letting the percentile imply otherwise.
-        modal_hash = reference.params_hash.mode() if len(reference) else pd.Series(dtype=object)
-        window_hashes = set(window.params_hash.dropna().unique()) if len(window) else set()
-        if len(modal_hash) and window_hashes and window_hashes != {modal_hash.iloc[0]}:
-            st.warning(
-                "The recent origins were scored by a different model generation "
-                f"(`{'`, `'.join(sorted(window_hashes))}`) than most of the reference days "
-                f"(`{modal_hash.iloc[0]}`). The comparison is indicative until the new "
-                "generation has a season of history of its own."
-            )
 
         st.markdown("**How recent error compares with the same time of year**")
         champion = scores[scores.model == drift.CHAMPION].sort_values("origin")
@@ -860,14 +863,14 @@ with about_tab:
         st.markdown(
             "This view uses deterministic synthetic demand because "
             "`data/clean/demand_hourly.csv` is absent or unreadable. Run "
-            "`PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52` to collect the "
+            "`PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 157` to collect the "
             "official SMARD snapshot."
         )
     else:
         st.markdown(
             "Running on the committed snapshot, but `data/clean/metadata.json` is missing, so "
             "no provenance can be shown. Re-run "
-            "`PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 52` to restore it."
+            "`PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 157` to restore it."
         )
 
     st.subheader("Method")

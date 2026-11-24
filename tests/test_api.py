@@ -15,7 +15,7 @@ def test_forecast_contract():
     response = client.post("/forecast", json={"as_of": "2026-08-28T00:00:00Z", "horizon_hours": 2})
     assert response.status_code == 200
     body = response.json()
-    assert body["model_version"] == "v1"
+    assert body["model_version"] == "v2"
     assert len(body["forecast"]) == 2
     assert {"timestamp", "prediction", "lower_bound", "upper_bound"}.issubset(body["forecast"][0])
 
