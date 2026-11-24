@@ -251,6 +251,18 @@ Beating "same hour yesterday" is the minimum. The harder question is how the mod
 
 So the honest claim is a tie, not a win. The gap between the second and third rows says that data latency costs more than model quality does: with real-time actuals the model would beat the official forecast. The most useful result is the last row. Averaging the two forecasts, with weights fixed in advance rather than fitted, is about 9% more accurate than the operators alone, because the two make different mistakes. The breakdown shows where each is stronger: the lagged model is slightly better outside winter, and the operators win clearly in winter and on public holidays, which is where weather forecasts and regional holiday knowledge pay off.
 
+## Does weather help?
+
+The operators win in winter, and they use weather forecasts, so temperature was the obvious feature to add. It is also the easiest one to leak: train and score on *observed* temperature and the model gets to see the weather it is meant to be forecasting. So every version trains and predicts on one source, and only forecasts that existed in time count ([study](reports/weather_study.md), [script](scripts/weather_study.py)). Temperature is a population-weighted average over the ten largest cities, from Open-Meteo's archive of past GFS forecasts and from ERA5 for the observed version. The rule was written down first: weather ships only if the 48-hours-ahead forecast beats no weather.
+
+| Temperature source | vs no weather, per origin (Nov 2026 study) | Verdict |
+|---|---|---|
+| Forecast made 48 hours ahead (what I could really use) | −19 MW, CI [−58, +21] | can't tell apart |
+| Forecast made 24 hours ahead | −38 MW, CI [−77, +1] | can't tell apart |
+| Observed (impossible in practice) | −21 MW, CI [−67, +30] | can't tell apart |
+
+So I didn't ship it. The interesting row is the last one: even perfect weather doesn't clearly help, so a better weather forecast wouldn't change the answer. At a 24-hour horizon, yesterday's load at the same hour was drawn under nearly the same weather, and the lag features already carry most of what temperature would say. That also suggests where the operators' winter edge comes from: they forecast about 62 hours ahead of my last data point, where the lags are older and weather should matter more. That is the next thing to test.
+
 # Demo
 
 The live version is at [stromblick.streamlit.app](https://stromblick.streamlit.app/). It pulls the latest SMARD data when it loads, so it forecasts from the most recent published hour, not from whenever the snapshot was committed.
@@ -272,9 +284,9 @@ The other tabs cover the full backtest, an anomaly explorer, tomorrow's high-dem
 # What Breaks
 
 - **What breaks first: the band at long horizons.** The band has one width for every hour ahead, but error grows with the horizon, so it over-covers the next few hours and under-covers the last few (about 89% at 19 to 24 hours ahead in the interval study). It also assumes the coming day looks like the last month, which holidays break: even with two years of training data the model has seen each one only twice. A band that widens with the horizon is the next thing I'd try.
-- **What I deliberately skipped: weather.** The model only uses past demand and the calendar. Temperature, wind and solar forecasts would almost certainly help, but I wanted the demand-only comparison to be solid before adding inputs I'd also have to forecast.
+- **What I tested and left out: temperature.** Adding it, from forecasts that existed at the time, didn't clear the bar at a 24-hour horizon, and neither did observed temperature (see [Does weather help?](#does-weather-help)). Solar radiation is untested: rooftop solar lowers measured grid load, but the forecast archive only has it from 2024, too short for a two-year training window plus a year of scoring.
 - **Risk I accepted: a short track record per model.** The drift monitor only compares a model generation with itself, so when the training window changed, its history restarted. Each backtest covers a full year, so every season has a reference from the first run on, but only one earlier year of it until more runs accumulate. The classifier has about a thousand labelled days, which is enough to rank models but not to settle close calls.
-- **What I'd change for production:** add weather inputs, save the exact data each forecast was made from, keep a final untouched test period, and move the weekly job into a real orchestrator once there's more than one source.
+- **What I'd change for production:** test weather at longer horizons and add solar once the archive is long enough, save the exact data each forecast was made from, keep a final untouched test period, and move the weekly job into a real orchestrator once there's more than one source.
 
 People: the data is national grid load added up across all of Germany. There's nothing about individuals in it, and the anomaly flags describe hours, not anyone's behaviour.
 
@@ -287,6 +299,7 @@ The gradient-boosted model clearly beats both baselines, and the significance te
 - **More data helped, but not evenly.** Two years of training beat one, mostly in winter, and most of it in the earlier of the two test years. A single pooled number would have hidden that, and the breakdown is what stopped me from picking five years just because it had the lowest average.
 - **Seasonality breaks naive monitoring.** A drift check that compares against the overall average would go red every January. Comparing to the same time of year was what made it usable.
 - **Who you compare against, and with what information, decides the headline.** Against the grid operators the model "wins" or "ties" depending only on how fresh its data is assumed to be. Pinning down the information cutoffs before scoring turned a tempting claim into an honest one, and the blend made the result useful anyway.
+- **A null result needs an oracle next to it.** Temperature not helping could mean bad weather forecasts or a feature with nothing to add. Scoring observed weather alongside told the two apart: even the oracle didn't help, so the answer is the second.
 - **A backtest isn't a track record.** Being able to replay old forecasts didn't prove what the model said at the time. That's why the forecast log is committed to git every day.
 
 # Running it yourself
@@ -313,6 +326,7 @@ PYTHONPATH=src python scripts/ingest_smard_api.py --weeks 157
 PYTHONPATH=src python scripts/generate_eda.py        # reports/eda.md + figures
 PYTHONPATH=src python scripts/benchmark.py           # reports/benchmark.md, ~45 min
 PYTHONPATH=src python scripts/window_study.py        # reports/window_study.md, ~1 h (--report-only rebuilds from cache)
+PYTHONPATH=src python scripts/weather_study.py       # reports/weather_study.md, ~20 min (--report-only rebuilds from cache)
 ```
 
 Call the API:

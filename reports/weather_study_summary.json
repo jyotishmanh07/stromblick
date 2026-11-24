@@ -1,0 +1,94 @@
+{
+  "generated": "2026-11-24",
+  "model_version": "v2",
+  "origins": 366,
+  "first_origin": "2025-11-17 23:00:00+00:00",
+  "last_origin": "2026-11-17 23:00:00+00:00",
+  "forecast_model": "gfs_seamless",
+  "cities": [
+    "Berlin",
+    "Hamburg",
+    "Munich",
+    "Cologne",
+    "Frankfurt",
+    "Stuttgart",
+    "Duesseldorf",
+    "Leipzig",
+    "Dortmund",
+    "Essen"
+  ],
+  "mean_mae": {
+    "Forecast 24 h ahead": 1511.7,
+    "Forecast 48 h ahead": 1530.7,
+    "No weather (v2)": 1549.5,
+    "Observed (oracle)": 1528.4
+  },
+  "comparisons": {
+    "Forecast 48 h ahead": {
+      "mean_diff": -18.74408470469248,
+      "ci_lower": -57.69719968397382,
+      "ci_upper": 21.453441703077466,
+      "wilcoxon_p": 0.03482366474710133,
+      "n": 366,
+      "holm_p": 0.06964732949420266,
+      "beats": false
+    },
+    "Forecast 24 h ahead": {
+      "mean_diff": -37.79348491973704,
+      "ci_lower": -76.84107818859718,
+      "ci_upper": 1.074123766445237,
+      "wilcoxon_p": 0.014719006617283002,
+      "n": 366,
+      "holm_p": 0.04415701985184901,
+      "beats": false
+    },
+    "Observed (oracle)": {
+      "mean_diff": -21.04103945726604,
+      "ci_lower": -66.86448152965218,
+      "ci_upper": 29.911033247974277,
+      "wilcoxon_p": 0.06980345635005852,
+      "n": 366,
+      "holm_p": 0.06980345635005852,
+      "beats": false
+    }
+  },
+  "holiday_comparisons": {
+    "Forecast 48 h ahead": {
+      "mean_diff": 59.30557299345516,
+      "ci_lower": -255.73362390584444,
+      "ci_upper": 417.09412180658904,
+      "wilcoxon_p": 0.7466583251953125,
+      "n": 17,
+      "holm_p": 1.0,
+      "beats": false
+    },
+    "Forecast 24 h ahead": {
+      "mean_diff": 89.93166949403351,
+      "ci_lower": -218.6127367406859,
+      "ci_upper": 437.055545070789,
+      "wilcoxon_p": 0.963226318359375,
+      "n": 17,
+      "holm_p": 1.0,
+      "beats": false
+    },
+    "Observed (oracle)": {
+      "mean_diff": 156.95171941429203,
+      "ci_lower": -329.2009625690125,
+      "ci_upper": 677.7135529317062,
+      "wilcoxon_p": 0.677703857421875,
+      "n": 17,
+      "holm_p": 1.0,
+      "beats": false
+    }
+  },
+  "temperature_forecast_mae_c": {
+    "Forecast 48 h ahead": 1.14,
+    "Forecast 24 h ahead": 1.08
+  },
+  "headline": "Forecast 48 h ahead",
+  "ship_weather": false,
+  "versions": {
+    "python": "3.10.16",
+    "scikit-learn": "1.7.2"
+  }
+}
