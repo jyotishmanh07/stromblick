@@ -21,10 +21,12 @@ import matplotlib.pyplot as plt  # noqa: E402
 from readme_blocks import p_text, sync_readme_block
 
 from energy_forecast import drift
+from energy_forecast.calibration import CALIBRATION_ORIGINS
 from energy_forecast.data import load_clean_demand
 from energy_forecast.evaluation import error_slices, metrics
 from energy_forecast.features import FEATURE_COLUMNS, add_features, german_holidays
 from energy_forecast.inference import (
+    conformal_quantile,
     coverage_test,
     diebold_mariano,
     paired_model_comparison,
@@ -192,12 +194,15 @@ def plot_error_slices(pooled_champion: pd.DataFrame, champion: str, out: Path) -
 
 def interval_coverage(
     pooled_champion: pd.DataFrame, residual_quantile: float = 0.95,
-    trailing_origins: int = 7, min_prior_origins: int = 3,
+    trailing_origins: int = CALIBRATION_ORIGINS, min_prior_origins: int = CALIBRATION_ORIGINS,
 ) -> dict[str, float]:
-    """Walk origins forward; size a ±quantile band from the most recent `trailing_origins`
-    earlier origins — the trailing-window recipe ForecastService._fit_validation_residuals
-    uses. The band that scores an origin never sees that origin's own errors. Reports how
-    often the observed value actually lands inside.
+    """Walk origins forward with the shipped band and report how often actuals land inside.
+
+    The band is the split-conformal recipe `calibration.pool_spread` serves: the
+    conformal quantile of the previous `trailing_origins` origins' absolute 24-hour
+    errors. The band that scores an origin never sees that origin's own errors. (Until
+    2026-11 this scored a 7-origin plain-quantile band while the service shipped a
+    different, wider one; reports/interval_study.md has the comparison.)
     """
     ordered = sorted(pooled_champion.origin.unique())
     inside = scored = 0
@@ -209,7 +214,7 @@ def interval_coverage(
         window = ordered[max(0, i - trailing_origins) : i]
         prior = pooled_champion[pooled_champion.origin.isin(window)]
         current = pooled_champion[pooled_champion.origin == origin]
-        spread = float(np.quantile(np.abs(prior.demand_mw - prior.predicted), residual_quantile))
+        spread = conformal_quantile(np.abs(prior.demand_mw - prior.predicted), residual_quantile)
         actual = current.demand_mw.to_numpy()
         predicted = current.predicted.to_numpy()
         hit = (actual >= predicted - spread) & (actual <= predicted + spread)
@@ -719,13 +724,16 @@ def main() -> int:
         *significance_section,
         "## Prediction-interval coverage",
         "",
-        f"The shipped interval is {champion}'s forecast ± the {coverage['nominal']:.0f}th "
-        "percentile of absolute residuals from *earlier* origins (the same recipe the service "
-        f"uses). Walking that band forward across {coverage['hours_scored']:,} scored hours, "
+        f"The shipped interval is {champion}'s forecast ± the split-conformal "
+        f"{coverage['nominal']:.0f}% quantile of absolute 24-hour errors from the previous "
+        f"{CALIBRATION_ORIGINS} origins (the recipe the service serves, chosen in "
+        "[interval_study.md](interval_study.md)). Walking that band forward across "
+        f"{coverage['hours_scored']:,} scored hours, "
         f"**{coverage['empirical']:.1f}%** of observed values land inside it against a "
         f"{coverage['nominal']:.0f}% nominal target, at a mean band width of "
-        f"{coverage['mean_band_mw']:,.0f} MW. This is an empirical magnitude band, not a "
-        "calibrated probabilistic interval.",
+        f"{coverage['mean_band_mw']:,.0f} MW. Split conformal targets 95% *on average*, "
+        "assuming recent errors resemble the next day's; it is not a full predictive "
+        "distribution, and its width is the same for every hour ahead.",
         "",
         *importance_section,
         "## Error at each origin",

@@ -8,10 +8,14 @@ import numpy as np
 import pandas as pd
 
 from .anomaly import detect_anomalies
+from .calibration import POOL_PATH, load_pool, pool_spread
 from .data import DataValidationError, load_clean_demand
 from .live import COMMITTED_LABEL, fetch_live_history, last_observed
 from .models import HistGradientBoostingForecast, forecast_with_interval
 from .verification import hindcast
+
+INTERVAL_CONFORMAL = "split conformal, last 28 daily forecasts"
+INTERVAL_FALLBACK = "one-week validation forecast (fallback: no current calibration pool)"
 
 
 def demo_demand(hours: int = 24 * 90) -> pd.DataFrame:
@@ -31,7 +35,7 @@ def demo_demand(hours: int = 24 * 90) -> pd.DataFrame:
 class ForecastService:
     def __init__(
         self, data_path: str | Path = "data/clean/demand_hourly.csv", live: bool = False,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float = 10.0, pool_path: str | Path = POOL_PATH,
     ) -> None:
         """Load history and prepare the interval model.
 
@@ -60,7 +64,25 @@ class ForecastService:
             self.live_warning = result.warning
         self.model = HistGradientBoostingForecast()
         self.residuals = np.array([])
-        self._fit_validation_residuals()
+        self.use_calibration_pool(load_pool(pool_path))
+
+    def use_calibration_pool(self, pool: pd.DataFrame | None) -> None:
+        """Size the band from a split-conformal pool, or fall back and say so.
+
+        The fallback is the older one-week validation recipe, which over-covers
+        (reports/interval_study.md); `interval_method` names whichever is in use so the
+        dashboard never presents the fallback as the calibrated band.
+        """
+        self.pool = pool
+        cutoff = self.last_observed
+        self.spread = pool_spread(pool, cutoff) if cutoff is not None else None
+        if self.spread is not None:
+            self.interval_method = INTERVAL_CONFORMAL
+            self.residuals = np.array([])
+        else:
+            self.interval_method = INTERVAL_FALLBACK
+            if not len(self.residuals):
+                self._fit_validation_residuals()
 
     @property
     def last_observed(self) -> pd.Timestamp | None:
@@ -68,7 +90,11 @@ class ForecastService:
         return last_observed(self.history)
 
     def _fit_validation_residuals(self) -> None:
-        """Learn interval width from a trailing, one-week validation window."""
+        """Fallback band: errors of one 168-hour forecast over the trailing week.
+
+        It mixes horizons up to 168 h, so it is wider than a 24-hour forecast needs and
+        covered 96.8% in the interval study. Used only when no current pool exists.
+        """
         validation_hours = 24 * 7
         if len(self.history) <= validation_hours + 200:
             return
@@ -101,11 +127,12 @@ class ForecastService:
 
     def hindcast(self, days: int = 7) -> pd.DataFrame:
         """Replay the last `days` daily origins, refitting strictly before each one."""
-        return hindcast(self.history, days=days)
+        return hindcast(self.history, days=days, pool=self.pool)
 
     def forecast(self, as_of: pd.Timestamp, horizon_hours: int) -> dict[str, object]:
         output = forecast_with_interval(
-            self.model, self.history, as_of, horizon_hours, validation_residuals=self.residuals
+            self.model, self.history, as_of, horizon_hours, validation_residuals=self.residuals,
+            spread=self.spread,
         )
         return {
             "model_version": output.model_version,

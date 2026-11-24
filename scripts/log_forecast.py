@@ -8,11 +8,13 @@ retrospective replay cannot manufacture after the outcome is known.
 import argparse
 import os
 
+from energy_forecast.calibration import POOL_PATH, build_pool, write_pool
 from energy_forecast.service import ForecastService
 from energy_forecast.verification import DEFAULT_LOG_PATH, append_forecast_log, forecast_record
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--path", default=str(DEFAULT_LOG_PATH), help="forecast log CSV")
+parser.add_argument("--pool-path", default=str(POOL_PATH), help="calibration pool CSV")
 parser.add_argument("--dry-run", action="store_true", help="print the rows, write nothing")
 parser.add_argument("--allow-stale", action="store_true", help="log even without live data")
 parser.add_argument(
@@ -30,15 +32,25 @@ if not service.is_live and not args.allow_stale:
     print("Refusing to log a forecast from a stale origin (pass --allow-stale to override).")
     raise SystemExit(1)
 
+# Refresh the split-conformal calibration pool from the same live history first, so the
+# band logged today comes from errors up to today's origin rather than yesterday's file.
+# ~35 model fits (~30 s), which is why it is built here and committed, not at app start.
+pool = build_pool(service.history, end=service.last_observed)
+service.use_calibration_pool(pool)
+print(f"Band: {service.interval_method}")
+
 rows = forecast_record(service)
 origin = rows.origin.iloc[0]
 
 if args.dry_run:
     print(rows.to_string(index=False))
-    print(f"Dry run — nothing written to {args.path}")
+    print(f"Dry run: nothing written to {args.path} or {args.pool_path}")
     changed = False
 else:
     log, changed = append_forecast_log(args.path, rows)
+    pool_changed = write_pool(pool, args.pool_path)
+    changed = changed or pool_changed
+    print(f"Calibration pool {'updated' if pool_changed else 'unchanged'} at {args.pool_path}")
     origins = int(log.origin.nunique())
 
 print(f"Origin: {origin.isoformat()}")

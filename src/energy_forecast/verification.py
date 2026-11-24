@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Callable
 import numpy as np
 import pandas as pd
 
+from .calibration import pool_spread
 from .evaluation import metrics
 from .live import last_observed
 from .models import HistGradientBoostingForecast
@@ -74,9 +75,14 @@ def hindcast(
     history: pd.DataFrame, days: int = 7, horizon_hours: int = 24,
     end: pd.Timestamp | None = None,
     model_factory: Callable[[], object] = HistGradientBoostingForecast,
-    residual_quantile: float = 0.95,
+    residual_quantile: float = 0.95, pool: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Replay the last `days` daily origins, refitting strictly before each one."""
+    """Replay the last `days` daily origins, refitting strictly before each one.
+
+    The band is the shipped split-conformal band when `pool` covers the calibration
+    origins before the first replayed one (`calibration.pool_spread` with that origin as
+    cutoff, so no replayed hour can size it); otherwise the one-week validation recipe.
+    """
     empty = pd.DataFrame(columns=HINDCAST_COLUMNS)
     end = end if end is not None else last_observed(history)
     if end is None:
@@ -95,20 +101,22 @@ def hindcast(
     if (data.timestamp <= end).sum() < days * horizon_hours + VALIDATION_HOURS + MIN_FIT_ROWS:
         return empty
 
-    # A fresh fit, not `service.residuals`: those come from the trailing 168h, which is
-    # exactly the window replayed below, so reusing them would leak the scored hours
-    # into the band that judges them.
-    band_end = origins[0] - pd.Timedelta(hours=VALIDATION_HOURS)
-    validation = data[(data.timestamp > band_end) & (data.timestamp <= origins[0])]
-    residual_model = model_factory().fit(data[data.timestamp <= band_end])
-    residuals = validation.demand_mw.to_numpy(dtype=float) - residual_model.predict(
-        pd.DatetimeIndex(validation.timestamp)
-    )
-    residuals = residuals[~np.isnan(residuals)]  # hours with no observed demand
-    if len(residuals):
-        spread = float(np.quantile(np.abs(residuals), residual_quantile))
-    else:
-        spread = float(np.std(data.demand_mw.dropna()) * 0.15)  # forecast_with_interval's fallback
+    # Never `service.residuals` or the service's spread: both come from data that overlaps
+    # the window replayed below, so reusing them would leak the scored hours into the
+    # band that judges them. The pool is cut off at the first replayed origin instead.
+    spread = pool_spread(pool, origins[0], level=residual_quantile)
+    if spread is None:
+        band_end = origins[0] - pd.Timedelta(hours=VALIDATION_HOURS)
+        validation = data[(data.timestamp > band_end) & (data.timestamp <= origins[0])]
+        residual_model = model_factory().fit(data[data.timestamp <= band_end])
+        residuals = validation.demand_mw.to_numpy(dtype=float) - residual_model.predict(
+            pd.DatetimeIndex(validation.timestamp)
+        )
+        residuals = residuals[~np.isnan(residuals)]  # hours with no observed demand
+        if len(residuals):
+            spread = float(np.quantile(np.abs(residuals), residual_quantile))
+        else:
+            spread = float(np.std(data.demand_mw.dropna()) * 0.15)  # the final fallback
 
     frame = replay_origins(data, origins, model_factory, horizon_hours)
     frame["lower_bound"] = frame.prediction - spread

@@ -5,7 +5,7 @@ to the Demo section of the README.
 
 - Time-series charts use **Europe/Berlin** on the x-axis — the timezone demand actually follows, so the daily shape reads correctly. Everything is stored and computed in UTC; the conversion is for display only. (The anomaly explorer is the one exception and still labels its axis UTC.)
 - The forecast model is `HistGradientBoostingForecast` (referred to below as HGB / the GBM).
-- Intervals and anomaly bounds are **empirical residual magnitudes**, not calibrated probabilities.
+- The forecast band is **split conformal**: it targets 95% coverage on average (see [interval_study.md](interval_study.md)). Anomaly bounds are **empirical residual magnitudes**, not calibrated probabilities.
 
 
 ## Header (shown above all tabs)
@@ -27,7 +27,7 @@ Three metric cards:
 |---|---|
 | **Black line — Observed** | Actual demand for the last 72 hours (3 days). |
 | **Blue line — Forecast** | HGB's 24-hour prediction. Recursive: each hour's prediction becomes the lag input for the next hour. |
-| **Shaded blue band — Prediction interval** | Forecast ± the 95th percentile of the model's absolute errors on a held-out validation week. Width = how wrong the model has been lately, not a probability guarantee. Falls back to ±0.15·std if no residuals exist. |
+| **Shaded blue band, prediction interval** | Forecast ± the split-conformal 95% quantile of the absolute errors of the last 28 daily forecasts, read from the committed `data/forecasts/calibration_pool.csv`. The caption names the band in use: if that file is missing or more than 8 days old it falls back to the older one-week validation band (wider, about 97% coverage), and to ±0.15·std if even that is impossible. |
 | **Dotted grey vertical line** | Forecast start (last observed hour). History to the left, prediction to the right. |
 | **Gaps in the black line** | Hours SMARD has indexed but not yet published — shown as gaps, never interpolated. |
 
@@ -46,7 +46,7 @@ and asked for the next 24 hours, so no future value can reach the prediction.
 |---|---|
 | **Dark line — Observed** | What demand actually was. |
 | **Orange dashed line — Hindcast** | What the model, refit at that day's origin, predicted for each hour. |
-| **Shaded band** | ± the 95th percentile of absolute residuals over the week *preceding* the replayed window — fit separately so the band never sees the hours it judges. |
+| **Shaded band** | The same split-conformal band, sized only from calibration origins whose 24 hours end before the first replayed origin, so the band never sees the hours it judges. Falls back to the one-week validation band before the replayed window when the pool doesn't reach back far enough. |
 | **Dotted grey vertical lines** | Each day's forecast origin. |
 | **Shaded grey spans** | Runs of hours SMARD has indexed but not yet published. |
 
@@ -89,8 +89,7 @@ be?" — a different question from "is it good?", which section B answers.
 - **Trailing 14-origin MAE** — mean 24-hour MAE over the most recent scored origins, against the
   median of its seasonal reference. Lower is better, so the delta arrow is colour-inverted.
 - **Interval coverage** — mean per-origin coverage in the latest run, judged against the coverage
-  this model has established (≈93%), *not* the 95% nominal label, which the band under-covers by
-  design.
+  this model has established, *not* the 95% nominal label, since no band lands on exactly 95%.
 - **Chart: champion error against its own season** — every retained per-origin MAE as a faint
   marker, its 14-origin trailing mean as a line, the season-matched reference IQR as a horizontal
   band, and the window being judged as a tinted column.

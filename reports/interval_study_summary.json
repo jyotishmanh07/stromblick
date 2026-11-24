@@ -1,0 +1,190 @@
+{
+  "generated": "2026-11-24",
+  "model_version": "v2",
+  "origins": 366,
+  "first_origin": "2025-11-22 09:00:00+00:00",
+  "last_origin": "2026-11-22 09:00:00+00:00",
+  "alpha": 0.05,
+  "cal_origins": 28,
+  "aci_gamma": 0.02,
+  "results": {
+    "Shipped (168h validation week)": {
+      "coverage": {
+        "mean_coverage": 0.9680100182149363,
+        "ci_lower": 0.9589025500910748,
+        "ci_upper": 0.9764344262295082,
+        "nominal": 0.95,
+        "p_value": 6.592485040476886e-05,
+        "n_origins": 366
+      },
+      "calibrated": false
+    },
+    "Benchmark recipe (7 origins)": {
+      "coverage": {
+        "mean_coverage": 0.9351092896174863,
+        "ci_lower": 0.9217896174863388,
+        "ci_upper": 0.9474043715846995,
+        "nominal": 0.95,
+        "p_value": 0.021543572867845716,
+        "n_origins": 366
+      },
+      "calibrated": false,
+      "interval_score_vs_shipped": {
+        "mean_diff": -1146.8504195445664,
+        "ci_lower": -1860.5256951068493,
+        "ci_upper": -411.1999694645229,
+        "wilcoxon_p": 4.212907039895728e-13,
+        "n": 366,
+        "holm_p": 1.2638721119687184e-12
+      },
+      "sharper": true,
+      "adopt": false
+    },
+    "Split conformal (28 origins)": {
+      "coverage": {
+        "mean_coverage": 0.9436475409836066,
+        "ci_lower": 0.9313524590163934,
+        "ci_upper": 0.9549180327868853,
+        "nominal": 0.95,
+        "p_value": 0.2870399731019318,
+        "n_origins": 366
+      },
+      "calibrated": true,
+      "interval_score_vs_shipped": {
+        "mean_diff": -1370.0178930413629,
+        "ci_lower": -2122.281971702015,
+        "ci_upper": -587.0808324281753,
+        "wilcoxon_p": 1.675045087092848e-13,
+        "n": 366,
+        "holm_p": 6.700180348371392e-13
+      },
+      "sharper": true,
+      "adopt": true
+    },
+    "Adaptive conformal": {
+      "coverage": {
+        "mean_coverage": 0.9486566484517305,
+        "ci_lower": 0.9371584699453552,
+        "ci_upper": 0.9592440801457196,
+        "nominal": 0.95,
+        "p_value": 0.8107920161617873,
+        "n_origins": 366
+      },
+      "calibrated": true,
+      "interval_score_vs_shipped": {
+        "mean_diff": -1087.9646450985094,
+        "ci_lower": -1752.6114198209928,
+        "ci_upper": -386.29246065205047,
+        "wilcoxon_p": 8.77327944893253e-10,
+        "n": 366,
+        "holm_p": 1.754655889786506e-09
+      },
+      "sharper": true,
+      "adopt": true
+    },
+    "Quantile GBM": {
+      "coverage": {
+        "mean_coverage": 0.5885701275045537,
+        "ci_lower": 0.5671647313296903,
+        "ci_upper": 0.6100865209471767,
+        "nominal": 0.95,
+        "p_value": 5.990216546080714e-110,
+        "n_origins": 366
+      },
+      "calibrated": false,
+      "interval_score_vs_shipped": {
+        "mean_diff": 11558.767022264692,
+        "ci_lower": 9601.106725496704,
+        "ci_upper": 13571.671493397582,
+        "wilcoxon_p": 5.280872318596478e-29,
+        "n": 366,
+        "holm_p": 2.640436159298239e-28
+      },
+      "sharper": false,
+      "adopt": false
+    },
+    "Conformalized quantile (CQR)": {
+      "coverage": {
+        "mean_coverage": 0.9462659380692169,
+        "ci_lower": 0.9348816029143898,
+        "ci_upper": 0.9566256830601093,
+        "nominal": 0.95,
+        "p_value": 0.49923793053836496,
+        "n_origins": 366
+      },
+      "calibrated": true,
+      "interval_score_vs_shipped": {
+        "mean_diff": -1601.8060565818014,
+        "ci_lower": -2331.431550490136,
+        "ci_upper": -897.9978300925366,
+        "wilcoxon_p": 9.349692027381657e-07,
+        "n": 366,
+        "holm_p": 9.349692027381657e-07
+      },
+      "sharper": true,
+      "adopt": true
+    }
+  },
+  "chosen": "Conformalized quantile (CQR)",
+  "means": {
+    "Shipped (168h validation week)": {
+      "coverage": 0.968,
+      "width": 10846.9875,
+      "interval_score": 12808.7299
+    },
+    "Benchmark recipe (7 origins)": {
+      "coverage": 0.9351,
+      "width": 8043.4399,
+      "interval_score": 11661.8794
+    },
+    "Split conformal (28 origins)": {
+      "coverage": 0.9436,
+      "width": 7947.4828,
+      "interval_score": 11438.712
+    },
+    "Adaptive conformal": {
+      "coverage": 0.9487,
+      "width": 8756.6237,
+      "interval_score": 11720.7652
+    },
+    "Quantile GBM": {
+      "coverage": 0.5886,
+      "width": 3595.1933,
+      "interval_score": 24367.4969
+    },
+    "Conformalized quantile (CQR)": {
+      "coverage": 0.9463,
+      "width": 8655.6568,
+      "interval_score": 11206.9238
+    }
+  },
+  "reliability": {
+    "0.5": {
+      "Benchmark recipe (7 origins)": 0.5059,
+      "Shipped (168h validation week)": 0.6639,
+      "Split conformal (28 origins)": 0.4959
+    },
+    "0.8": {
+      "Benchmark recipe (7 origins)": 0.782,
+      "Shipped (168h validation week)": 0.895,
+      "Split conformal (28 origins)": 0.7955
+    },
+    "0.9": {
+      "Benchmark recipe (7 origins)": 0.8857,
+      "Shipped (168h validation week)": 0.9434,
+      "Split conformal (28 origins)": 0.8974
+    },
+    "0.95": {
+      "Adaptive conformal": 0.9487,
+      "Benchmark recipe (7 origins)": 0.9351,
+      "Conformalized quantile (CQR)": 0.9463,
+      "Quantile GBM": 0.5886,
+      "Shipped (168h validation week)": 0.968,
+      "Split conformal (28 origins)": 0.9436
+    }
+  },
+  "versions": {
+    "python": "3.10.16",
+    "scikit-learn": "1.7.2"
+  }
+}

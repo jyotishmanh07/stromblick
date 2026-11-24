@@ -52,6 +52,8 @@ That headline is the easy part. Three follow-up findings matter more:
 
 **The uncertainty band is slightly too narrow — and we can say so precisely.** The shipped band is designed to contain the true value 95% of the time. Walked forward across the whole backtest, it actually contains it **93.2%** of the time (CI 91.5–94.7%). That gap is statistically real, not sampling noise. It is a small, honest miscalibration: users should read the band as "roughly how wrong this model has been lately", not as a probabilistic guarantee.
 
+*Update, November 2026:* that 93.2% turned out to describe the benchmark's own recipe, not the band users saw. The shipped band was sized from one week-long forecast and actually over-covered (96.8%) while being wider than needed. A follow-up [study](interval_study.md) replaced it with a split-conformal band that caught 94.4% of actuals and is about 27% narrower.
+
 **Public holidays are the clear weak spot.** On holiday hours the model errs by **2,741 MW more** than on ordinary hours (CI 2,169–3,312 MW). The effect size is large. Germany's holidays vary by federal state and the model only knows national ones, so this is the first place additional work would pay.
 
 ![Where the model errs](figures/benchmark_error_slices.png)
@@ -84,7 +86,7 @@ The more interesting result is a negative one. On the *anomaly-day* target, a lo
 
 - **No weather.** Temperature is the single largest missing driver. Demand-only features were a deliberate first baseline; weather covariates are the obvious next step and would most likely help exactly where the model is weakest.
 - **One year of data.** Seasonal patterns are observed once. The classification track in particular works with a few hundred labelled days, so its rankings are indicative rather than settled.
-- **The interval is empirical.** It comes from recent residual magnitudes, not from a probabilistic model, and it measurably under-covers.
+- **The interval holds on average, not hour by hour.** Since November 2026 it is split conformal, which targets 95% coverage assuming the next day's errors resemble the last month's. It has one width for every hour ahead, so it under-covers the far end of the 24 hours.
 - **Anomalies are flags, not explanations.** Nothing here establishes causation.
 - **SMARD revises history.** Published results should cite the exact snapshot recorded in `data/clean/metadata.json`.
 - **Production would need more.** Persistent model artifacts, drift monitoring, and — at real scale — a dedicated data-quality framework (Great Expectations, dbt tests) behind an orchestrator (Airflow, Dagster). This project runs an explicit validation gate and a weekly scheduled refresh instead, which is the right size for what it is.

@@ -353,7 +353,8 @@ with forecast_tab:
     )
     st.caption(
         "Observed demand for the last three days, then the 24-hour forecast; the dotted line "
-        "marks the forecast start and the shaded band is the model's recent error magnitude."
+        "marks the forecast start and the shaded band is where 95% of actuals should land "
+        f"(band: {service.interval_method})."
         + gap_note
     )
 
@@ -499,7 +500,8 @@ with quality_tab:
         coverage_help = (
             "How often actual demand landed inside the forecast's shaded range in the latest "
             "run. Judged against what this model has actually been achieving, not the 95% "
-            "label it aims at. The range is known to be slightly too narrow."
+            "label it aims at, so a drift alarm means coverage got worse, not that it was "
+            "never exactly 95%."
         )
         if coverage["level"] == "unknown":
             status[2].metric("Actuals inside the range", "—", help=coverage_help)
@@ -884,9 +886,11 @@ with about_tab:
         "time and refits every model at each one. No random split is ever used.\n"
         "- **Honest baseline.** The gradient-boosting model is judged against seasonal-naive: "
         "if it cannot beat \"same hour yesterday\", it is not earning its complexity.\n"
-        "- **Empirical intervals and anomalies.** Both come from validation-residual "
-        "magnitudes only, not calibrated probabilistic forecasts, and anomalies are prompts "
-        "to investigate weather, calendar, or grid context rather than confirmed events.\n"
+        "- **Calibrated band, empirical anomalies.** The forecast band is split conformal, "
+        "chosen in a study against five alternatives because it lands on 95% coverage while "
+        "staying narrow. Anomaly bounds still come from validation-residual magnitudes, and "
+        "anomalies are prompts to investigate weather, calendar, or grid context rather than "
+        "confirmed events.\n"
         "- **Tested claims.** The champion's margin over each rival carries a paired bootstrap "
         "CI and a Wilcoxon/Diebold-Mariano p-value, computed per origin because hours inside "
         "one 24-hour window are correlated.\n"
@@ -897,10 +901,13 @@ with about_tab:
 
     st.subheader("How to read these charts")
     st.markdown(
-        "- **The forecast band.** ± the 95th percentile of absolute residuals the model made on "
-        "a held-out validation week. Its width reflects how wrong the model has recently been. It "
-        "is an empirical error magnitude, not a calibrated probability and not a coverage "
-        "guarantee.\n"
+        "- **The forecast band.** ± the split-conformal 95% quantile of how wrong the model's "
+        "last 28 daily forecasts were. Over a year of backtests it caught 94.4% of actuals "
+        "(the interval study, November 2026). The 95% holds *on average*: it assumes the coming "
+        "day's errors look like the last month's, and it has one width for every hour ahead, "
+        "so it is a little too wide for the next few hours and a little too narrow for the "
+        "last few. If the calibration file is missing or stale, the band falls back to an "
+        "older, wider recipe, and the caption under the forecast says so.\n"
         "- **Unpublished hours.** SMARD indexes each hour before publishing its value, so the "
         "most recent hours often carry no reading. They appear as gaps or shaded bands and are "
         "reported rather than imputed, and excluded from the scores rather than filled in, "
@@ -920,7 +927,7 @@ with about_tab:
         "right-skewed (mean 1,944 MW, median 1,548 MW, max 10,370 MW). A single window above the "
         "threshold is only ever *watch*; **regressed** needs two consecutive runs, which chance "
         "alone produces about once in 2,000. Coverage is judged against the coverage this model "
-        "has established, not the 95% label, because the band already under-covers by design and "
+        "has established, not the 95% label, because a band never lands on exactly 95% and "
         "a monitor that is always red is one nobody reads. Nothing here fails a workflow: the "
         "weekly refresh keeps committing, and that panel is where drift surfaces.\n"
         "- **Anomaly bounds.** The 99% residual bounds are learned from the validation week "

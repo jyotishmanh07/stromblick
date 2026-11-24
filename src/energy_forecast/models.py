@@ -144,10 +144,24 @@ class HistGradientBoostingForecast:
         return self
 
     def forecast(self, timestamps: pd.DatetimeIndex) -> np.ndarray:
+        return self.forecast_with_rows(timestamps)[0]
+
+    def forecast_with_rows(
+        self, timestamps: pd.DatetimeIndex
+    ) -> tuple[np.ndarray, pd.DataFrame]:
+        """Recursive point forecast plus the feature row each step was predicted from.
+
+        The rows are what a second model (e.g. a quantile regressor) must see to describe
+        *this* forecast: lags read off the point path, exactly as the point model did.
+        `feature_row` cannot be called afterwards on the finished path, because its DST
+        flag reads the last entries of the history it is given.
+        """
         history = self.history.copy()
         predictions: list[float] = []
+        rows: list[dict[str, float]] = []
         for timestamp in _timestamps(timestamps):
             row = feature_row(history, timestamp)
+            rows.append(row)
             if any(pd.isna(row[column]) for column in FEATURE_COLUMNS):
                 prediction = float(history.iloc[-1])
             else:
@@ -160,7 +174,7 @@ class HistGradientBoostingForecast:
                     prediction = float((design @ self.coefficients).item())
             predictions.append(prediction)
             history.loc[timestamp] = prediction
-        return np.asarray(predictions)
+        return np.asarray(predictions), pd.DataFrame(rows, columns=list(rows[0]) if rows else [])
 
     predict = forecast
 
@@ -177,7 +191,14 @@ class ForecastOutput:
 def forecast_with_interval(
     model: object, history: pd.DataFrame, as_of: pd.Timestamp, horizon_hours: int,
     residual_quantile: float = 0.95, validation_residuals: np.ndarray | None = None,
+    spread: float | None = None,
 ) -> ForecastOutput:
+    """Point forecast plus a symmetric band.
+
+    `spread` (the band's half-width, e.g. from `calibration.pool_spread`) wins when
+    given; otherwise the `residual_quantile` of `validation_residuals`, and failing that
+    0.15 x the history's standard deviation.
+    """
     start = pd.to_datetime(as_of, utc=True)
     timestamps = pd.date_range(
         start.ceil("1h") + pd.Timedelta(hours=1),
@@ -188,7 +209,9 @@ def forecast_with_interval(
     residuals = np.asarray(
         validation_residuals if validation_residuals is not None else [], dtype=float
     )
-    if len(residuals):
+    if spread is not None:
+        spread = float(spread)
+    elif len(residuals):
         spread = float(np.quantile(np.abs(residuals), residual_quantile))
     else:
         spread = float(np.std(history.demand_mw) * 0.15)

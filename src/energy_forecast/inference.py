@@ -135,3 +135,18 @@ def coverage_test(
         "p_value": float(t.pvalue),
         "n_origins": int(len(rates)),
     }
+
+
+def conformal_quantile(scores, level: float) -> float:
+    """Split-conformal quantile: the ceil((n + 1) * level)-th smallest score.
+
+    The +1 is the finite-sample correction that makes coverage hold at `level` for
+    exchangeable scores, where a plain empirical quantile under-covers slightly. Returns
+    inf when n is too small to support `level` (ceil((n + 1) * level) > n), which callers
+    treat as "not enough calibration data". NaN scores are ignored.
+    """
+    scores = np.asarray(scores, dtype=float)
+    scores = np.sort(scores[~np.isnan(scores)])
+    n = len(scores)
+    k = int(np.ceil((n + 1) * level))
+    return float("inf") if n == 0 or k > n else float(scores[k - 1])

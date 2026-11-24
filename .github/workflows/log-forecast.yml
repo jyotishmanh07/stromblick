@@ -55,7 +55,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/forecasts/forecast_log.csv
+          git add data/forecasts/forecast_log.csv data/forecasts/calibration_pool.csv
           if git diff --staged --quiet; then
             echo "Nothing changed."
           else

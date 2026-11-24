@@ -138,7 +138,9 @@ There isn't one. Data arrives once a week in a batch, and the dashboard pulls wh
 
 **Significance** ([inference.py](src/energy_forecast/inference.py)): a Wilcoxon test and a paired bootstrap on per-origin errors, and Diebold-Mariano on hourly errors. I use per-origin values as the sampling unit because the 24 hours in one forecast share the same weather and demand level, so treating them as independent would overstate confidence.
 
-**Prediction band and anomalies:** both come from errors on a held-out validation week. The band is the forecast plus or minus the 95th percentile of absolute validation error. Anomalies are observed hours outside the 1st to 99th percentile range. These are empirical bands, not calibrated probabilities.
+**Prediction band** ([calibration.py](src/energy_forecast/calibration.py), [study](reports/interval_study.md)): split conformal. The band is the forecast plus or minus the conformal 95% quantile of how wrong the model's last 28 daily forecasts were. I got here by testing the old band against five alternatives on a year of daily origins, with the rule fixed before the run. The study found a bug in how I'd been measuring it: the band the dashboard showed was sized from one week-long forecast, so it mixed in large week-ahead errors and was too *wide* (96.8% coverage), while the benchmark had been scoring a different, narrower recipe and reporting that it was too narrow. In the November 2026 study, split conformal caught 94.4% of actuals with a band 27% narrower than the old one. Conformalized quantile regression scored slightly better, but I couldn't separate the two on average and it needs two extra models in the serving path, so I shipped the simpler one. Computing the band needs 28 model fits, too slow for API startup, so the daily workflow builds that calibration file and commits it. If it's missing or more than a week old, the app falls back to the old band and labels it as the fallback.
+
+**Anomalies:** observed hours outside the 1st to 99th percentile of errors on the week before the window. These are empirical bounds, not calibrated probabilities.
 
 **Tuning** ([scripts/tune.py](scripts/tune.py)): a nested search with Optuna. The inner loop tunes on origins in the first 70% of the data, and the outer loop checks the winner on later origins it never saw. On the last search ([reports/tuning.md](reports/tuning.md)) the inner gain was 3.5% but the outer gain was 1.3%, with a confidence interval that includes zero, so I kept the defaults. A new config only replaces them if the outer interval is entirely below zero.
 
@@ -241,7 +243,7 @@ The live version is at [stromblick.streamlit.app](https://stromblick.streamlit.a
 
 ![Forecast tab: the last three days observed, then the next 24 hours with the prediction band](reports/figures/dashboard_forecast.png)
 
-The Forecast tab shows the last three days of observed demand and the next 24 hours. The shaded band shows how wrong the model was on a recent held-out week. It isn't a probability guarantee.
+The Forecast tab shows the last three days of observed demand and the next 24 hours. The shaded band is where 95% of actuals should land, sized from how wrong the last 28 daily forecasts were.
 
 ![Track record tab: the last seven daily forecasts replayed against what happened](reports/figures/dashboard_track_record.png)
 
@@ -255,7 +257,7 @@ The other tabs cover the full backtest, an anomaly explorer, tomorrow's high-dem
 
 # What Breaks
 
-- **What breaks first: the prediction band.** It's built from one week of validation error and consistently covers a little less than its 95% label. Holidays are the worst case: even with two years of training data the model has seen each one only twice. The next thing I'd try is tuning the band's window length and percentile against coverage.
+- **What breaks first: the band at long horizons.** The band has one width for every hour ahead, but error grows with the horizon, so it over-covers the next few hours and under-covers the last few (about 89% at 19 to 24 hours ahead in the interval study). It also assumes the coming day looks like the last month, which holidays break: even with two years of training data the model has seen each one only twice. A band that widens with the horizon is the next thing I'd try.
 - **What I deliberately skipped: weather.** The model only uses past demand and the calendar. Temperature, wind and solar forecasts would almost certainly help, but I wanted the demand-only comparison to be solid before adding inputs I'd also have to forecast.
 - **Risk I accepted: a short track record per model.** The drift monitor only compares a model generation with itself, so when the training window changed, its history restarted. Each backtest covers a full year, so every season has a reference from the first run on, but only one earlier year of it until more runs accumulate. The classifier has about a thousand labelled days, which is enough to rank models but not to settle close calls.
 - **What I'd change for production:** add weather inputs, save the exact data each forecast was made from, keep a final untouched test period, and move the weekly job into a real orchestrator once there's more than one source.
