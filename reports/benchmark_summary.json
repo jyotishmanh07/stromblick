@@ -1,96 +1,98 @@
 {
-  "snapshot_start": "2025-11-30 23:00:00+00:00",
+  "snapshot_start": "2023-11-26 23:00:00+00:00",
   "snapshot_end": "2026-11-23 09:00:00+00:00",
-  "rows": 8579,
-  "origins": 329,
+  "rows": 26219,
+  "origins": 366,
   "step_hours": 24,
   "horizon_hours": 24,
-  "eval_start": "2025-12-28 23:00:00+00:00",
-  "eval_end": "2026-11-22 22:00:00+00:00",
-  "eval_hours": 7896,
+  "eval_start": "2025-11-22 10:00:00+00:00",
+  "eval_end": "2026-11-23 09:00:00+00:00",
+  "eval_hours": 8784,
   "champion": "HistGradientBoosting",
-  "lift_vs_seasonal_naive_pct": 50.4,
+  "model_version": "v2",
+  "params_hash": "e38777e9",
+  "lift_vs_seasonal_naive_pct": 61.3,
   "models": {
     "Seasonal naive": {
-      "mae_mean": 3891.7,
-      "mae_std": 3303.9,
-      "rmse_mean": 4419.2,
-      "smape_mean": 7.519
+      "mae_mean": 3892.8,
+      "mae_std": 2286.4,
+      "rmse_mean": 4914.6,
+      "smape_mean": 7.444
     },
     "SARIMAX": {
-      "mae_mean": 3325.9,
-      "mae_std": 2761.8,
-      "rmse_mean": 3927.5,
-      "smape_mean": 6.367
+      "mae_mean": 3704.1,
+      "mae_std": 2344.9,
+      "rmse_mean": 4642.0,
+      "smape_mean": 7.246
     },
     "HistGradientBoosting": {
-      "mae_mean": 1930.6,
-      "mae_std": 1336.7,
-      "rmse_mean": 2342.4,
-      "smape_mean": 3.607
+      "mae_mean": 1505.3,
+      "mae_std": 837.7,
+      "rmse_mean": 1826.1,
+      "smape_mean": 2.865
     }
   },
   "interval_coverage": {
     "nominal": 95.0,
-    "empirical": 93.1,
-    "hours_scored": 7824.0,
-    "mean_band_mw": 10806.3
+    "empirical": 94.33,
+    "hours_scored": 8112.0,
+    "mean_band_mw": 7994.18
   },
   "significance": {
     "comparisons": {
       "Seasonal naive": {
-        "mean_diff": -1961.1881,
-        "ci_lower": -2312.3326,
-        "ci_upper": -1625.4765,
-        "wilcoxon_p": 3.72e-21,
-        "n": 329.0,
-        "dm_dm_stat": -11.2101,
-        "dm_p_value": 6.01e-29,
-        "dm_n": 7896.0
+        "mean_diff": -2387.4808,
+        "ci_lower": -2631.9292,
+        "ci_upper": -2141.5933,
+        "wilcoxon_p": 9.84e-42,
+        "n": 366.0,
+        "dm_dm_stat": -14.4889,
+        "dm_p_value": 4.95e-47,
+        "dm_n": 8784.0
       },
       "SARIMAX": {
-        "mean_diff": -1395.3442,
-        "ci_lower": -1694.8478,
-        "ci_upper": -1107.8445,
-        "wilcoxon_p": 5.28e-17,
-        "n": 329.0,
-        "dm_dm_stat": -9.7348,
-        "dm_p_value": 2.86e-22,
-        "dm_n": 7896.0
+        "mean_diff": -2198.8431,
+        "ci_lower": -2443.5313,
+        "ci_upper": -1958.5775,
+        "wilcoxon_p": 1.4e-42,
+        "n": 366.0,
+        "dm_dm_stat": -15.3809,
+        "dm_p_value": 1.07e-52,
+        "dm_n": 8784.0
       }
     },
     "holiday_slice": {
-      "mean_diff": 2629.534,
-      "ci_lower": 2040.3209,
-      "ci_upper": 3228.4982,
+      "mean_diff": 971.9338,
+      "ci_lower": 626.8205,
+      "ci_upper": 1343.9906,
       "permutation_p": 0.0002,
-      "cohens_d": 1.3083,
-      "n_slice": 168.0,
-      "n_rest": 7728.0
+      "cohens_d": 0.6682,
+      "n_slice": 216.0,
+      "n_rest": 8568.0
     },
     "coverage": {
-      "mean_coverage": 0.931,
-      "ci_lower": 0.9153,
-      "ci_upper": 0.9457,
+      "mean_coverage": 0.9433,
+      "ci_lower": 0.931,
+      "ci_upper": 0.9545,
       "nominal": 0.95,
-      "p_value": 0.0147,
-      "n_origins": 326.0
+      "p_value": 0.259,
+      "n_origins": 338.0
     },
     "champion_beats_all_rivals": true
   },
   "top_features": [
     [
       "lag_1h",
-      8819.79868653876
+      8806.50019468716
     ],
     [
       "hour",
-      1802.601527404457
+      1813.6065308210914
     ],
     [
       "weekday",
-      116.68792388792204
+      149.91445098953582
     ]
   ],
-  "worst_hour": 15
+  "worst_hour": 10
 }
