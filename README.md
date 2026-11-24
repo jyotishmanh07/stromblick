@@ -13,7 +13,7 @@ Stromblick forecasts German electricity demand for the next 24 hours and flags h
 - **What I do with it:** ingest and validate the data, build features that can't leak the future, compare three forecasting models with a walk-forward backtest, publish one forecast a day to a log in git, and watch the model for drift.
 - **Result:** the gradient-boosted model roughly halves the error of the "same hour yesterday" baseline, and that gap is statistically significant. Against the grid operators' own day-ahead forecast it's a statistical tie with the data I can actually get, but averaging the two beats the operators on their own. Public holidays are its weakest spot. Current numbers are under [Results](#results).
 
-For a non-technical summary of the business case, see the [write-up](reports/writeup.md).
+For a non-technical summary of the business case, see the [write-up](reports/writeup.md). For the whole analysis in one place (data, baselines, error by horizon, what the model relies on, the prediction band and the studies), see the [notebook](notebooks/analysis.ipynb). It only reads committed results, so it runs in seconds.
 
 **Goal 1:** beat the simplest sensible forecast, "same hour yesterday", by enough to justify a real model.
 **How I know it worked:** the champion's MAE is about half the seasonal-naive MAE over 300+ daily forecast origins, and a paired bootstrap on per-origin errors puts the difference well clear of zero.
@@ -263,6 +263,10 @@ The operators win in winter, and they use weather forecasts, so temperature was 
 
 So I didn't ship it. The interesting row is the last one: even perfect weather doesn't clearly help, so a better weather forecast wouldn't change the answer. At a 24-hour horizon, yesterday's load at the same hour was drawn under nearly the same weather, and the lag features already carry most of what temperature would say. That also suggests where the operators' winter edge comes from: they forecast about 62 hours ahead of my last data point, where the lags are older and weather should matter more. That is the next thing to test.
 
+## What the model relies on
+
+The benchmark's permutation importance scores one-step-ahead rows, where every lag is a real measurement. The shipped forecast is recursive: from the second hour on, `lag_1h` is the model's own previous prediction. So I computed exact SHAP values on the rows the model actually forecast from, at every benchmark origin ([report](reports/explainability.md), [script](scripts/explain.py)). In the November 2026 run, `lag_1h` carried most of the attribution (87%) at both one hour and 24 hours ahead, while the error grew from about 0.6 GW to 2.2 GW. The model keeps leaning on its own output, so an early miss is carried through the day. That is also why one band width for all 24 hours under-covers the last ones. On public holidays the holiday flag pulls the forecast down, but closes only about a third of the gap.
+
 # Demo
 
 The live version is at [stromblick.streamlit.app](https://stromblick.streamlit.app/). It pulls the latest SMARD data when it loads, so it forecasts from the most recent published hour, not from whenever the snapshot was committed.
@@ -319,6 +323,35 @@ Or both services with Docker:
 docker compose up --build
 ```
 
+## Explore the notebook
+
+[notebooks/analysis.ipynb](notebooks/analysis.ipynb) is the best place to poke at the results yourself. GitHub shows it with its outputs, but it's more fun to open it and change things:
+
+```bash
+pip install -e ".[notebook]"
+jupyter lab notebooks/analysis.ipynb
+```
+
+It trains nothing, so every cell runs in seconds, and every table is a plain pandas DataFrame read from a committed CSV. Some things to try:
+
+- Slice the backtest your own way. `reports/benchmark_champion_hourly.csv` has every forecast hour of the latest year (origin, timestamp, actual, predicted), so you can group the error by month, weekday or hour, or pull out a single bad day.
+- Compare the models on the days you care about. `reports/benchmark_metrics.csv` has one row per origin and model.
+- Rerun a forecast from any past hour. The package is importable from the notebook, and one fit takes about two seconds:
+
+```python
+from energy_forecast.models import HistGradientBoostingForecast
+
+demand = pd.read_csv("data/clean/demand_hourly.csv", parse_dates=["timestamp"])
+origin = pd.Timestamp("2025-12-23 09:00", tz="UTC")       # any hour in the snapshot
+model = HistGradientBoostingForecast().fit(demand[demand.timestamp <= origin])
+hours = pd.date_range(origin + pd.Timedelta(hours=1), periods=24, freq="1h")
+forecast = pd.Series(model.predict(hours), index=hours)
+actual = demand.set_index("timestamp").demand_mw.reindex(hours)
+(forecast - actual).abs().mean()                            # MAE in MW for that day
+```
+
+The run-up to Christmas is a good place to start. The forecast above misses by about 3.2 GW, roughly twice a typical day, and moving the origin a few days either way shows how fast that changes.
+
 Refresh the data and rebuild the reports:
 
 ```bash
@@ -327,6 +360,8 @@ PYTHONPATH=src python scripts/generate_eda.py        # reports/eda.md + figures
 PYTHONPATH=src python scripts/benchmark.py           # reports/benchmark.md, ~45 min
 PYTHONPATH=src python scripts/window_study.py        # reports/window_study.md, ~1 h (--report-only rebuilds from cache)
 PYTHONPATH=src python scripts/weather_study.py       # reports/weather_study.md, ~20 min (--report-only rebuilds from cache)
+PYTHONPATH=src python scripts/explain.py             # reports/explainability.md (SHAP), ~6 min
+jupyter nbconvert --to notebook --execute --inplace notebooks/analysis.ipynb   # needs pip install -e ".[notebook]"
 ```
 
 Call the API:

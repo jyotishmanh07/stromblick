@@ -1,0 +1,216 @@
+{
+  "generated": "2026-11-24",
+  "model_version": "v2",
+  "origins": 366,
+  "first_origin": "2025-11-22 09:00:00+00:00",
+  "last_origin": "2026-11-22 09:00:00+00:00",
+  "additivity_max_abs_mw": 2.9103830456733704e-10,
+  "mean_abs_shap_mw": {
+    "hour": 1328.6,
+    "weekday": 180.8,
+    "month": 82.0,
+    "is_weekend": 0.2,
+    "is_public_holiday": 24.1,
+    "is_dst_transition": 0.0,
+    "lag_1h": 7406.8,
+    "lag_24h": 149.0,
+    "lag_168h": 273.8,
+    "rolling_24h_mean": 39.5,
+    "rolling_7d_mean": 47.6
+  },
+  "permutation_importance_mw": {
+    "hour": 1800.7,
+    "weekday": 144.2,
+    "month": 0.0,
+    "is_weekend": 0.0,
+    "is_public_holiday": 0.0,
+    "is_dst_transition": 0.0,
+    "lag_1h": 8775.2,
+    "lag_24h": 32.8,
+    "lag_168h": 92.1,
+    "rolling_24h_mean": -11.9,
+    "rolling_7d_mean": 0.2
+  },
+  "group_share_by_step": {
+    "1": {
+      "Last hour (lag_1h)": 0.871,
+      "Same hour yesterday / last week": 0.039,
+      "Rolling means": 0.01,
+      "Calendar": 0.08
+    },
+    "2": {
+      "Last hour (lag_1h)": 0.849,
+      "Same hour yesterday / last week": 0.038,
+      "Rolling means": 0.01,
+      "Calendar": 0.104
+    },
+    "3": {
+      "Last hour (lag_1h)": 0.825,
+      "Same hour yesterday / last week": 0.037,
+      "Rolling means": 0.01,
+      "Calendar": 0.128
+    },
+    "4": {
+      "Last hour (lag_1h)": 0.848,
+      "Same hour yesterday / last week": 0.041,
+      "Rolling means": 0.009,
+      "Calendar": 0.101
+    },
+    "5": {
+      "Last hour (lag_1h)": 0.871,
+      "Same hour yesterday / last week": 0.048,
+      "Rolling means": 0.01,
+      "Calendar": 0.071
+    },
+    "6": {
+      "Last hour (lag_1h)": 0.793,
+      "Same hour yesterday / last week": 0.05,
+      "Rolling means": 0.009,
+      "Calendar": 0.147
+    },
+    "7": {
+      "Last hour (lag_1h)": 0.763,
+      "Same hour yesterday / last week": 0.053,
+      "Rolling means": 0.011,
+      "Calendar": 0.173
+    },
+    "8": {
+      "Last hour (lag_1h)": 0.842,
+      "Same hour yesterday / last week": 0.051,
+      "Rolling means": 0.012,
+      "Calendar": 0.095
+    },
+    "9": {
+      "Last hour (lag_1h)": 0.817,
+      "Same hour yesterday / last week": 0.039,
+      "Rolling means": 0.013,
+      "Calendar": 0.131
+    },
+    "10": {
+      "Last hour (lag_1h)": 0.72,
+      "Same hour yesterday / last week": 0.034,
+      "Rolling means": 0.012,
+      "Calendar": 0.235
+    },
+    "11": {
+      "Last hour (lag_1h)": 0.654,
+      "Same hour yesterday / last week": 0.041,
+      "Rolling means": 0.01,
+      "Calendar": 0.295
+    },
+    "12": {
+      "Last hour (lag_1h)": 0.632,
+      "Same hour yesterday / last week": 0.047,
+      "Rolling means": 0.009,
+      "Calendar": 0.313
+    },
+    "13": {
+      "Last hour (lag_1h)": 0.689,
+      "Same hour yesterday / last week": 0.052,
+      "Rolling means": 0.007,
+      "Calendar": 0.252
+    },
+    "14": {
+      "Last hour (lag_1h)": 0.792,
+      "Same hour yesterday / last week": 0.052,
+      "Rolling means": 0.007,
+      "Calendar": 0.149
+    },
+    "15": {
+      "Last hour (lag_1h)": 0.878,
+      "Same hour yesterday / last week": 0.04,
+      "Rolling means": 0.006,
+      "Calendar": 0.075
+    },
+    "16": {
+      "Last hour (lag_1h)": 0.908,
+      "Same hour yesterday / last week": 0.032,
+      "Rolling means": 0.006,
+      "Calendar": 0.054
+    },
+    "17": {
+      "Last hour (lag_1h)": 0.867,
+      "Same hour yesterday / last week": 0.027,
+      "Rolling means": 0.006,
+      "Calendar": 0.101
+    },
+    "18": {
+      "Last hour (lag_1h)": 0.788,
+      "Same hour yesterday / last week": 0.028,
+      "Rolling means": 0.007,
+      "Calendar": 0.177
+    },
+    "19": {
+      "Last hour (lag_1h)": 0.641,
+      "Same hour yesterday / last week": 0.059,
+      "Rolling means": 0.009,
+      "Calendar": 0.291
+    },
+    "20": {
+      "Last hour (lag_1h)": 0.53,
+      "Same hour yesterday / last week": 0.084,
+      "Rolling means": 0.011,
+      "Calendar": 0.375
+    },
+    "21": {
+      "Last hour (lag_1h)": 0.635,
+      "Same hour yesterday / last week": 0.055,
+      "Rolling means": 0.011,
+      "Calendar": 0.298
+    },
+    "22": {
+      "Last hour (lag_1h)": 0.75,
+      "Same hour yesterday / last week": 0.041,
+      "Rolling means": 0.01,
+      "Calendar": 0.199
+    },
+    "23": {
+      "Last hour (lag_1h)": 0.83,
+      "Same hour yesterday / last week": 0.04,
+      "Rolling means": 0.01,
+      "Calendar": 0.119
+    },
+    "24": {
+      "Last hour (lag_1h)": 0.866,
+      "Same hour yesterday / last week": 0.039,
+      "Rolling means": 0.009,
+      "Calendar": 0.086
+    }
+  },
+  "mae_by_step_mw": {
+    "1": 590.7,
+    "2": 867.2,
+    "3": 1086.2,
+    "4": 1259.9,
+    "5": 1286.1,
+    "6": 1327.6,
+    "7": 1414.7,
+    "8": 1414.0,
+    "9": 1472.9,
+    "10": 1442.7,
+    "11": 1429.1,
+    "12": 1424.2,
+    "13": 1447.5,
+    "14": 1527.1,
+    "15": 1555.7,
+    "16": 1578.3,
+    "17": 1579.5,
+    "18": 1643.5,
+    "19": 1832.7,
+    "20": 1919.3,
+    "21": 1923.0,
+    "22": 1945.1,
+    "23": 1994.9,
+    "24": 2164.8
+  },
+  "holidays": {
+    "hours": 216,
+    "mean_holiday_shap_mw": -351.6571589124515,
+    "mean_error_mw": 800.9390801233479,
+    "mean_error_other_mw": -97.24886857891141
+  },
+  "versions": {
+    "python": "3.10.16",
+    "scikit-learn": "1.7.2"
+  }
+}
