@@ -11,7 +11,7 @@ Stromblick forecasts German electricity demand for the next 24 hours and flags h
 - **Data:** hourly total grid load for Germany from SMARD, the Bundesnetzagentur's public electricity market platform. Three years of history, refreshed every week; the forecaster trains on the latest two.
 - **Tools:** Python (pandas, scikit-learn, statsmodels), DuckDB for the SQL reporting layer, FastAPI, Streamlit, Docker, and GitHub Actions for the scheduled jobs.
 - **What I do with it:** ingest and validate the data, build features that can't leak the future, compare three forecasting models with a walk-forward backtest, publish one forecast a day to a log in git, and watch the model for drift.
-- **Result:** the gradient-boosted model roughly halves the error of the "same hour yesterday" baseline, and that gap is statistically significant. The prediction band runs a bit narrow, and public holidays are its weakest spot. Current numbers are under [Results](#results).
+- **Result:** the gradient-boosted model roughly halves the error of the "same hour yesterday" baseline, and that gap is statistically significant. Against the grid operators' own day-ahead forecast it's a statistical tie with the data I can actually get, but averaging the two beats the operators on their own. Public holidays are its weakest spot. Current numbers are under [Results](#results).
 
 For a non-technical summary of the business case, see the [write-up](reports/writeup.md).
 
@@ -62,6 +62,7 @@ flowchart LR
   - [Stream Processing](#stream-processing)
   - [Visualizations](#visualizations)
 - [Results](#results)
+  - [Against the operators' forecast](#against-the-operators-forecast)
 - [Demo](#demo)
 - [What Breaks](#what-breaks)
 - [Conclusion](#conclusion)
@@ -237,6 +238,19 @@ Daily event classifier, full report in [reports/classification.md](reports/class
 On the **anomaly** target the gradient-boosted model beats the calendar-only baseline (PR-AUC 0.680 vs 0.534), so those days carry demand signal beyond holidays and DST on this snapshot. On the August 2026 snapshot the two nearly tied, which is why this reading is recomputed rather than written down.
 <!-- CLASSIFICATION:END -->
 
+## Against the operators' forecast
+
+Beating "same hour yesterday" is the minimum. The harder question is how the model compares with the day-ahead load forecast Germany's transmission operators publish, which SMARD carries as module 411 ([study](reports/tso_study.md), [script](scripts/tso_study.py)). The tricky part is giving both sides the same information. The operators issue their forecast for day D at about 10:00 the day before, with weather forecasts and real-time metering. I only see actual load once SMARD publishes it, about a day late, and I use no weather. So I scored the model three ways on 365 days, with the rule for what counts as a win written down first:
+
+| My model's information | vs operators, per day (Nov 2026 study) | Verdict |
+|---|---|---|
+| Data right up to midnight before D (impossible in practice) | −511 MW, CI [−642, −379] | beats them |
+| Data up to their issue time, about 38 hours ahead | −170 MW, CI [−315, −23] | beats them |
+| What I can actually get: their issue time minus SMARD's lag, about 62 hours ahead | +150 MW, CI [−15, +323] | can't tell apart |
+| Fixed 50/50 average of theirs and that lagged forecast | −177 MW, CI [−265, −88] | beats them |
+
+So the honest claim is a tie, not a win. The gap between the second and third rows says that data latency costs more than model quality does: with real-time actuals the model would beat the official forecast. The most useful result is the last row. Averaging the two forecasts, with weights fixed in advance rather than fitted, is about 9% more accurate than the operators alone, because the two make different mistakes. The breakdown shows where each is stronger: the lagged model is slightly better outside winter, and the operators win clearly in winter and on public holidays, which is where weather forecasts and regional holiday knowledge pay off.
+
 # Demo
 
 The live version is at [stromblick.streamlit.app](https://stromblick.streamlit.app/). It pulls the latest SMARD data when it loads, so it forecasts from the most recent published hour, not from whenever the snapshot was committed.
@@ -272,6 +286,7 @@ The gradient-boosted model clearly beats both baselines, and the significance te
 - **Nested tuning was worth it.** The inner search showed a gain, but most of it disappeared on unseen origins. Without the outer loop I'd have shipped a config that only looked better.
 - **More data helped, but not evenly.** Two years of training beat one, mostly in winter, and most of it in the earlier of the two test years. A single pooled number would have hidden that, and the breakdown is what stopped me from picking five years just because it had the lowest average.
 - **Seasonality breaks naive monitoring.** A drift check that compares against the overall average would go red every January. Comparing to the same time of year was what made it usable.
+- **Who you compare against, and with what information, decides the headline.** Against the grid operators the model "wins" or "ties" depending only on how fresh its data is assumed to be. Pinning down the information cutoffs before scoring turned a tempting claim into an honest one, and the blend made the result useful anyway.
 - **A backtest isn't a track record.** Being able to replay old forecasts didn't prove what the model said at the time. That's why the forecast log is committed to git every day.
 
 # Running it yourself

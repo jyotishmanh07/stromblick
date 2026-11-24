@@ -1,0 +1,123 @@
+{
+  "generated": "2026-11-24",
+  "model_version": "v2",
+  "days": 365,
+  "first_day": "2025-11-23",
+  "last_day": "2026-11-22",
+  "issue_hour_berlin": 10,
+  "smard_lag_hours": 24.0,
+  "means": {
+    "Operators' day-ahead": {
+      "mae": 2068.8,
+      "bias": 214.7
+    },
+    "Model, fresh data (upper bound)": {
+      "mae": 1558.0,
+      "bias": 280.7
+    },
+    "Model at their issue time": {
+      "mae": 1899.0,
+      "bias": 57.2
+    },
+    "Model with SMARD's lag": {
+      "mae": 2219.3,
+      "bias": 44.5
+    },
+    "50/50 blend (operators + lagged model)": {
+      "mae": 1892.3,
+      "bias": 129.6
+    }
+  },
+  "comparisons": {
+    "Model, fresh data (upper bound)": {
+      "mean_diff": -510.83673739215646,
+      "ci_lower": -642.3418710338105,
+      "ci_upper": -378.809893819853,
+      "wilcoxon_p": 5.389239490806925e-17,
+      "n": 365,
+      "holm_p": 2.15569579632277e-16,
+      "verdict": "beats the operators"
+    },
+    "Model at their issue time": {
+      "mean_diff": -169.8017527712703,
+      "ci_lower": -314.92259851412706,
+      "ci_upper": -22.744707550976695,
+      "wilcoxon_p": 0.0001040474516943506,
+      "n": 365,
+      "holm_p": 0.0002080949033887012,
+      "verdict": "beats the operators"
+    },
+    "Model with SMARD's lag": {
+      "mean_diff": 150.43904056026656,
+      "ci_lower": -15.456448144572303,
+      "ci_upper": 322.83925269822026,
+      "wilcoxon_p": 0.6011377665601578,
+      "n": 365,
+      "holm_p": 0.6011377665601578,
+      "verdict": "indistinguishable from the operators"
+    },
+    "50/50 blend (operators + lagged model)": {
+      "mean_diff": -176.55655788712747,
+      "ci_lower": -264.6045543600236,
+      "ci_upper": -87.8237995079143,
+      "wilcoxon_p": 1.6871155723086247e-07,
+      "n": 365,
+      "holm_p": 5.061346716925874e-07,
+      "verdict": "beats the operators"
+    }
+  },
+  "tso_by_year": {
+    "2015": {
+      "bias": -3039.7,
+      "mae": 3263.9
+    },
+    "2016": {
+      "bias": -3485.7,
+      "mae": 3539.5
+    },
+    "2017": {
+      "bias": -2124.3,
+      "mae": 2307.0
+    },
+    "2018": {
+      "bias": -1656.2,
+      "mae": 1980.0
+    },
+    "2019": {
+      "bias": -2120.6,
+      "mae": 2401.1
+    },
+    "2020": {
+      "bias": -1167.2,
+      "mae": 1821.3
+    },
+    "2021": {
+      "bias": -1763.9,
+      "mae": 2267.2
+    },
+    "2022": {
+      "bias": 772.2,
+      "mae": 2195.8
+    },
+    "2023": {
+      "bias": 171.8,
+      "mae": 1942.8
+    },
+    "2024": {
+      "bias": -400.8,
+      "mae": 1962.7
+    },
+    "2025": {
+      "bias": 395.9,
+      "mae": 1933.0
+    },
+    "2026": {
+      "bias": 248.0,
+      "mae": 2079.9
+    }
+  },
+  "versions": {
+    "python": "3.10.16",
+    "scikit-learn": "1.7.2"
+  }
+}
